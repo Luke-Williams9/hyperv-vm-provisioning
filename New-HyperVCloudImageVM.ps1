@@ -86,7 +86,7 @@ Function New-HyperVCloudImageVM () {
     [switch] $ShowSerialConsoleWindow = $false,
     [switch] $ShowVmConnectWindow = $false,
     [switch] $Force = $false,
-    [swotch] $userDataTest = $false
+    [switch] $userDataTest = $false
   )
   if ($userDataTest) {
     $verbose = $true
