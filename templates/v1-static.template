@@ -1,0 +1,31 @@
+## /network-config on NoCloud cidata disk
+## version 1 format
+## version 2 is completely different, see the docs
+## version 2 is not supported by Fedora
+# ---
+
+# I think this is just going to be for static IP configurations
+
+# values surrounded by !!@ @!! must be replaced with powerhell variables of the same name
+
+version: 1
+config:
+  - enabled
+  - type: physical
+    name: !!@NetInterface@!!
+    mac_address: !!@VMStaticMacAddress@!!
+    subnets:
+    - type: static
+        address: !!@NetAddress@!!
+        netmask: !!@NetNetmask@!!
+        network: !!@NetNetwork@!!
+        routes:
+          - network: 0.0.0.0
+            netmask: 0.0.0.0
+            gateway: !!@NetGateway@!!
+  - type: nameserver
+    address: [!!@NameServers@!!]
+    search:  [!!@DomainName@!!]
+
+
+

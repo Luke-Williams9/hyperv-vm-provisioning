@@ -1,0 +1,11 @@
+# inline-ENI network configuration
+
+hwaddress ether !!@VMStaticMacAddress@!!
+  address !!@NetAddress@!!
+  network !!@NetNetwork@!!
+  netmask !!@NetNetmask@!!
+  broadcast !!@Broadcast@!!
+  gateway !!@NetGateway@!!
+
+  dns-nameservers !!@NameServers@!!
+  dns-search !!@DomainName@!!

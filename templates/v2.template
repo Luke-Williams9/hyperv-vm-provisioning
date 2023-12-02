@@ -1,0 +1,16 @@
+# values surrounded by !!@ @!! must be replaced with powerhell variables of the same name
+
+version: 2
+config: enabled
+ethernets:
+  !!@NetInterface@!!:
+    dhcp: !!@NetAutoconfig@!!
+    mac_address: !!@VMStaticMacAddress@!!
+    addresses: !!@NetAddress@!!
+    gateway4: !!@NetGateway@!!
+    nameservers:
+      addresses: !!@NameServers@!!
+      search: !!@$DomainName@!!
+
+
+

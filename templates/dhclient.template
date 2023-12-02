@@ -1,0 +1,20 @@
+# Static IP address
+- content: |
+    # Configuration file for /sbin/dhclient.
+    send host-name = gethostname();
+    lease {
+        interface "!!@NetInterface@!!";
+        fixed-address !!@NetAddress@!!;
+        option host-name "!!@FQDN@!!";
+        option subnet-mask !!@NetAddress@!!;
+        option routers !!@NetGateway@!!;
+        option domain-name-servers !!@NameServers@!!;
+        renew 2 2022/1/1 00:00:01;
+        rebind 2 2022/1/1 00:00:01;
+        expire 2 2022/1/1 00:00:01;
+    }
+
+    # Generate Stable Private IPv6 Addresses instead of hardware based ones
+    slaac private
+
+path: /etc/dhcp/dhclient.conf

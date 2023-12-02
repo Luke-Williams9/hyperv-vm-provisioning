@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ns0:Environment xmlns="http://schemas.dmtf.org/ovf/environment/1"
+    xmlns:ns0="http://schemas.dmtf.org/ovf/environment/1"
+    xmlns:ns1="http://schemas.microsoft.com/windowsazure"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ns1:ProvisioningSection>
+    <ns1:Version>1.0</ns1:Version>
+    <ns1:LinuxProvisioningConfigurationSet>
+      <ns1:ConfigurationSetType>LinuxProvisioningConfiguration</ns1:ConfigurationSetType>
+        <ns1:HostName>!!@VMHostname@!!</ns1:HostName>
+        <ns1:UserName>!!@GuestAdminUsername@!!</ns1:UserName>
+        <ns1:UserPassword>!!@GuestAdminPassword@!!</ns1:UserPassword>
+        <ns1:DisableSshPasswordAuthentication>false</ns1:DisableSshPasswordAuthentication>
+        <ns1:CustomData>$([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($userdata)))</ns1:CustomData>
+        <dscfg>$([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($dscfg)))</dscfg>
+        <!-- TODO add ssh key provisioning support -->
+        <!--
+            <SSH>
+              <PublicKeys>
+                <PublicKey>
+                  <Fingerprint>EB0C0AB4B2D5FC35F2F0658D19F44C8283E2DD62</Fingerprint>
+                  <Path>$HOME/UserName/.ssh/authorized_keys</Path>
+                  <Value>ssh-rsa AAAANOTAREALKEY== foo@bar.local</Value>
+                </PublicKey>
+              </PublicKeys>
+              <KeyPairs>
+                <KeyPair>
+                  <Fingerprint>EB0C0AB4B2D5FC35F2F0658D19F44C8283E2DD62</Fingerprint>
+                  <Path>$HOME/UserName/.ssh/id_rsa</Path>
+                </KeyPair>
+              </KeyPairs>
+            </SSH>
+        -->
+    </ns1:LinuxProvisioningConfigurationSet>
+  </ns1:ProvisioningSection>
+
+  <ns1:PlatformSettingsSection>
+    <ns1:Version>1.0</ns1:Version>
+    <ns1:PlatformSettings>
+      <ns1:KmsServerHostname>kms.core.windows.net</ns1:KmsServerHostname>
+      <ns1:ProvisionGuestAgent>false</ns1:ProvisionGuestAgent>
+      <ns1:GuestAgentPackageName xsi:nil="true" />
+      <ns1:PreprovisionedVm>true</ns1:PreprovisionedVm>
+      <ns1:PreprovisionedVMType>Unknown</ns1:PreprovisionedVMType> <!-- https://github.com/canonical/cloud-init/blob/5e6ecc615318b48e2b14c2fd1f78571522848b4e/cloudinit/sources/DataSourceAzure.py#L94 -->
+    </ns1:PlatformSettings>
+  </ns1:PlatformSettingsSection>
+</ns0:Environment>

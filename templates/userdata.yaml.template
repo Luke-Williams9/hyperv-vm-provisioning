@@ -1,0 +1,164 @@
+#cloud-config
+# vim: syntax=yaml
+# created: !!@createdDateStamp@!!
+# values surrounded by !!@ @!! need to be replaced by powershell variables of the same name
+
+hostname: !!@VMHostname@!!
+fqdn: !!@FQDN@!!
+# cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
+# /etc/defaults/locale set and results into error
+#locale: $Locale
+timezone: !!@TimeZone@!!
+
+growpart:
+  mode: auto
+  devices: [/]
+  ignore_growroot_disabled: false
+
+#apt:
+#  http_proxy: http://host:port
+#  https_proxy: http://host:port
+
+preserve_sources_list: true
+package_update: true
+package_upgrade: true
+package_reboot_if_required: true
+# Should render a distro-specific package string to insert down here
+packages:
+  - eject
+  - console-setup
+  - keyboard-configuration
+  !!@packages@!!
+  # packages will have to be one of the below, depending on distro:
+  # Debian hyperv linux integration services https://poweradm.com/install-linux-integration-services-hyper-v/
+  # - hyperv-daemons
+  # Ubuntu azure kernel https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/Supported-Ubuntu-virtual-machines-on-Hyper-V#notes
+  # - linux-tools-virtual
+  # - linux-cloud-tools-virtual
+  # - linux-azure
+
+
+# documented keyboard option, but not implemented ?
+# https://cloudinit.readthedocs.io/en/latest/topics/modules.html#keyboard
+# https://github.com/sulmone/X11/blob/59029dc09211926a5c95ff1dd2b828574fefcde6/share/X11/xkb/rules/xorg.lst#L181
+# Do we need keyboard at all here?
+keyboard:
+  layout: !!@KeyboardLayout@!!
+
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/linux/cloudinit-add-user#add-a-user-to-a-vm-with-cloud-init
+
+users:
+  - default
+  - name: !!@GuestAdminUsername@!!
+    no_user_group: true
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    plain_text_passwd: !!@GuestAdminPassword@!!
+    lock_passwd: false
+    !!@SSHkeys@!!
+    # SSHkeys can be either null or rendered yaml like below:
+    # ssh_authorized_keys:
+    # - <GuestAdminSshPubKey>
+
+
+disable_root: true    # true: notify default user account / false: allow root ssh login
+ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
+
+#ssh_authorized_keys:
+#  - ssh-rsa AAAAB... comment
+
+# bootcmd can be setup like runcmd but would run at very early stage
+# on every cloud-init assisted boot if not prepended by command "cloud-init-per once|instance|always":
+
+
+!!@bootcmd@!!
+runcmd:
+  !!@netAutoConfigENIfile@!!
+  # remove metadata iso
+  - [ sh, -c, "if test -b /dev/cdrom; then eject; fi" ]
+  - [ sh, -c, "if test -b /dev/sr0; then eject /dev/sr0; fi" ]
+  !!@azureWAagentDisable@!!
+  # disable cloud init on next boot (https://cloudinit.readthedocs.io/en/latest/topics/boot.html, https://askubuntu.com/a/1047618)
+  - [ sh, -c, touch /etc/cloud/cloud-init.disabled ]
+  # set locale
+  # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
+  # /etc/defaults/locale set and results into error
+  - [ locale-gen, "$($Locale).UTF-8" ]
+  - [ update-locale, "$($Locale).UTF-8" ]
+  # documented keyboard option, but not implemented ?
+  # change keyboard layout, src: https://askubuntu.com/a/784816
+  - [ sh, -c, sed -i 's/XKBLAYOUT=\"\w*"/XKBLAYOUT=\"'$($KeyboardLayout)'\"/g' /etc/default/keyboard ]
+
+write_files:
+  # hyperv-daemons package in mosts distros is missing this file and spamming syslog:
+  # https://github.com/torvalds/linux/blob/master/tools/hv/hv_get_dns_info.sh
+  - content: |
+      #!/bin/bash
+
+      # This example script parses /etc/resolv.conf to retrive DNS information.
+      # In the interest of keeping the KVP daemon code free of distro specific
+      # information; the kvp daemon code invokes this external script to gather
+      # DNS information.
+      # This script is expected to print the nameserver values to stdout.
+      # Each Distro is expected to implement this script in a distro specific
+      # fashion. For instance on Distros that ship with Network Manager enabled,
+      # this script can be based on the Network Manager APIs for retrieving DNS
+      # entries.
+
+      cat /etc/resolv.conf 2>/dev/null | awk '/^nameserver/ { print $2 }'
+    path: /usr/libexec/hypervkvpd/hv_get_dns_info
+  # hyperv-daemons package in mosts distros is missing this file and spamming syslog:
+  # https://github.com/torvalds/linux/blob/master/tools/hv/hv_get_dhcp_info.sh
+  - content: |
+      #!/bin/bash
+      # SPDX-License-Identifier: GPL-2.0
+
+      # This example script retrieves the DHCP state of a given interface.
+      # In the interest of keeping the KVP daemon code free of distro specific
+      # information; the kvp daemon code invokes this external script to gather
+      # DHCP setting for the specific interface.
+      #
+      # Input: Name of the interface
+      #
+      # Output: The script prints the string "Enabled" to stdout to indicate
+      #	that DHCP is enabled on the interface. If DHCP is not enabled,
+      #	the script prints the string "Disabled" to stdout.
+      #
+      # Each Distro is expected to implement this script in a distro specific
+      # fashion. For instance, on Distros that ship with Network Manager enabled,
+      # this script can be based on the Network Manager APIs for retrieving DHCP
+      # information.
+
+      # RedHat based systems
+      #if_file="/etc/sysconfig/network-scripts/ifcfg-"$1
+      # Debian based systems
+      if_file=`"/etc/network/interrfaces.d/*`"
+
+      dhcp=`$(grep `"dhcp`" `$if_file 2>/dev/null)
+
+      if [ "$dhcp" != "" ];
+      then
+      echo "Enabled"
+      else
+      echo "Disabled"
+      fi
+    path: /usr/libexec/hypervkvpd/hv_get_dhcp_info
+!!@network_write_files@!!
+
+
+manage_etc_hosts: true
+manage_resolv_conf: true
+
+resolv_conf:
+  nameservers: !!@NameServers@!!
+  searchdomains:
+    - !!@DomainName@!!
+  domain: !!@DomainName@!!
+
+power_state:
+  mode: !!@CloudInitPowerState@!!
+  message: Provisioning finished, will !!@CloudInitPowerState@!! ...
+  timeout: 15
