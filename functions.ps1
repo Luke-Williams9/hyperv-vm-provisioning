@@ -1,3 +1,25 @@
+function Get-DnsInfo {
+    # Try to get DNS servers and domain suffix from network configuration
+    $networkConfig = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+
+    $dnsServers = $networkConfig.DNSServerSearchOrder | Where-Object { $_ -ne $null } | Select-Object -Unique
+    $domainSuffix = $networkConfig.DNSDomainSuffixSearchOrder | Where-Object { $_ -ne $null } | Select-Object -Unique
+
+    if ($dnsServers.Count -eq 0) {
+        # If DNS servers are not configured, fall back to default gateway
+        $defaultGateway = (
+            Get-NetRoute -AddressFamily IPv4 | Where-Object { 
+                $_.DestinationPrefix -eq '0.0.0.0/0' 
+        }).NextHop
+        $dnsServers = (Resolve-DnsName -Name $defaultGateway).QueryResults.QueryData.IPAddress | Where-Object { $_ -ne $null } | Select-Object -Unique
+    }
+
+    return @{
+        DnsServers = $dnsServers
+        DomainSuffix = $domainSuffix
+    }
+}
+
 function Render-Template {
     # Read a config file template, match any strings surrounded by $pre and $post, to keys of the same name in $Variables
     # and replace them with the value of the key in $Variables
@@ -118,6 +140,11 @@ Function Cleanup-VM {
         }
     }
 }
+Function Make-Random {
+    Param  ( [parameter(position=0)][int]$count = 10 )
+    Return (-join ((0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count $count | Foreach-Object {[char]$_}))
+}
+
 
 Function Set-VMAdvancedSettings {
         <#
@@ -405,3 +432,4 @@ Function Set-VMAdvancedSettings {
     #}  # uncomment this line and the first two lines to use as a profile or dot-sourced function
 }
 
+# $freeRAMbytes = ((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum

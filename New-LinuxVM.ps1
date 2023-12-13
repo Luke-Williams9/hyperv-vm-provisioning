@@ -29,10 +29,44 @@
 
 #requires -Modules Hyper-V
 #requires -RunAsAdministrator
-
+[cmdletBinding()]
 param (
-  #[string] $VMName = "CloudVm",
-  [string] $VMName = "UbuntuVM4",
+  [array]  $additionalRuncmd,
+  [bool]   $BaseImageCheckForUpdate = $true, # check for newer image at Distro cloud-images site
+  [bool]   $BaseImageCleanup = $true, # delete old vhd image. Set to false if using (TODO) differencing VHD
+  [bool]   $ConvertImageToNoCloud = $false, # could be used for other image types that do not support NoCloud, not just Azure
+  [string] $CloudInitPowerState = "reboot", # poweroff, halt, or reboot , https://cloudinit.readthedocs.io/en/latest/reference/modules.html#power-state-change
+  [string] $CustomUserDataYamlFile,
+# [string] $DownloadURL = 'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.tar.xz',
+  [string] $DownloadURL = "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img",
+  [switch] $Force = $false,
+  [string] $GuestAdminUsername = "admin",
+# [string] $GuestAdminPassword = $null, # Run randomStringFunction - optional fallback to 'passw0rd' or something else simple
+  [string] $GuestAdminPassword = "Passw0rd",
+  [string] $GuestAdminSshPubKey,
+# [string] $imageOS = 'debian',
+  [string] $imageOS = $null,
+  [bool]   $ImageTypeAzure = $false,
+  [string] $KeyboardLayout = "us", # 2-letter country code, for more info https://wiki.archlinux.org/title/Xorg/Keyboard_configuration
+  [string] $KeyboardModel, # default: "pc105"
+  [string] $KeyboardOptions, # example: "compose:rwin"
+  [string] $Locale = ((Get-Culture).Name.replace('-','_')) + '.UTF-8', # "en_US.UTF-8",
+  [string] $NetMacAddress = $null,
+  [string] $NetInterface  = "eth0",
+  [string] $NetAddress,
+  [string] $NetNetmask,
+  [string] $NetNetwork,
+  [string] $NetGateway,
+  [array]  $NameServers,
+  [string] $NetConfigType = "ENI-file", # ENI, v1, v2, ENI-file, dhclient
+  [array]  $packages = '',#@('python3','pip','docker','docker-compose'),
+  [switch] $ShowSerialConsoleWindow = $false,
+  [switch] $ShowVmConnectWindow = $false,
+  [switch] $userDataTest = $false,
+  [string] $tempRoot = "${env:systemdrive}\hvtemp",
+  # [string] $TimeZone = "Etc/GMT" + [string](Get-Timezone).BaseUTCoffset.hours,
+  [string] $TimeZone = "UTC", # UTC or continental zones of IANA DB like: Europe/Berlin. Fuck IANA timezones. how the hell did those nerds make it so complicated? its just gmt + or - an integer FFS
+  [string] $VMName,
   [int]    $VMGeneration = 1, # create gen1 hyper-v machine because of portability to Azure (https://docs.microsoft.com/en-us/azure/virtual-machines/windows/prepare-for-upload-vhd-image)
   [int]    $VMProcessorCount = 2,
   [bool]   $VMDynamicMemoryEnabled = $false,
@@ -53,46 +87,12 @@ param (
   #[switch] $VMMaximumBandwidth = $null,
   [switch] $VMMacAddressSpoofing = $false,
   [switch] $VMExposeVirtualizationExtensions = $false,
-  [string] $VMVersion = "8.0", # version 8.0 for hyper-v 2016 compatibility , check all possible values with Get-VMHostSupportedVersion
-  [string] $VMHostname = $VMName,
+  #[string] $VMVersion = "8.0", # version 8.0 for hyper-v 2016 compatibility , check all possible values with Get-VMHostSupportedVersion
+  [string] $VMVersion = (Get-VMHostSupportedVersion | Where-Object IsDefault).Version,
+  [string] $VMHostname,
   [string] $VMMachine_StoragePath = $null, # if defined setup machine path with storage path as subfolder
   [string] $VMpath = $null, # if not defined here default Virtal Machine path is used
-  [string] $VHDpath = $null, # if not defined here Hyper-V settings path / fallback path is set below
-  [bool]   $ConvertImageToNoCloud = $false, # could be used for other image types that do not support NoCloud, not just Azure
-  [bool]   $ImageTypeAzure = $false,
-  [string] $DomainName = $null, # Set this automatically based on the hosts domain #########################################
-  [string] $VMStaticMacAddress = $null,
-  [string] $NetInterface = "eth0",
-  [string] $NetAddress = $null,
-  [string] $NetNetmask = $null,
-  [string] $NetNetwork = $null,
-  [string] $NetGateway = $null,
-  [array]  $NameServers = @('1.1.1.2','1.0.0.2'), # Set this to the gateway by default?   ############################################
-  [string] $NetConfigType = "ENI-file", # ENI, v1, v2, ENI-file, dhclient
-  [string] $KeyboardLayout = "us", # 2-letter country code, for more info https://wiki.archlinux.org/title/Xorg/Keyboard_configuration
-  [string] $KeyboardModel, # default: "pc105"
-  [string] $KeyboardOptions, # example: "compose:rwin"
-  [string] $Locale = "en_US", # "en_US.UTF-8",
-  [string] $TimeZone = "UTC", # UTC or continental zones of IANA DB like: Europe/Berlin
-  [string] $CloudInitPowerState = "reboot", # poweroff, halt, or reboot , https://cloudinit.readthedocs.io/en/latest/reference/modules.html#power-state-change
-  [string] $CustomUserDataYamlFile,
-  [string] $GuestAdminUsername = "admin",
-  [string] $GuestAdminPassword = "Passw0rd",
-  [string] $GuestAdminSshPubKey,
-  #[string] $imageOS = 'debian',
-  [string] $imageOS = $null,
-  [string] $ImageVersion = $null, # $ImageName ="focal" # 20.04 LTS , $ImageName="bionic" # 18.04 LTS
-  [string] $ImageRelease = $null, # default option is get latest but could be fixed to some specific version for example "release-20210413"
-  [string] $ImageBaseUrl = $null, # alternative https://mirror.scaleuptech.com/ubuntu-cloud-images/releases
-  [bool]   $BaseImageCheckForUpdate = $true, # check for newer image at Distro cloud-images site
-  [bool]   $BaseImageCleanup = $true, # delete old vhd image. Set to false if using (TODO) differencing VHD
-  [switch] $ShowSerialConsoleWindow = $false,
-  [switch] $ShowVmConnectWindow = $false,
-  [switch] $Force = $false,
-  [switch] $userDataTest = $false,
-  #[string] $downloadURL = 'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.tar.xz',
-  [string] $downloadURL = "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img",
-  [string] $tempRoot = "${env:systemdrive}\hvtemp"
+  [string] $VHDpath = $null # if not defined here Hyper-V settings path / fallback path is set below
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,6 +107,7 @@ if (([System.Version]$vmms.fileversioninfo.productversion).Major -lt 10) {
   Throw "Unsupported Hyper-V version. Minimum supported version for is Hyper-V 2016."
 }
 
+# Include the functions! 
 . (Join-Path $PSScriptRoot functions.ps1)
 
 # pwsh (powershell core): try to load module hyper-v
@@ -128,16 +129,72 @@ $bsdtarPath = Join-Path $PSScriptRoot "tools\bsdtar.exe"
   $verbose = $true
 #}
 
+# RAM check - leave 1GB free on the host
+$freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum) #/ 1024MB
+
+
+if ($VMMemoryStartupBytes -gt $freeRAMbytes) {
+  Write-Warning "Requested memory ($VMMemoryStartupBytes) exceeds available host memory ($freeRAMbytes)."  
+  Do {
+    $VMMemoryStartupBytes -= 128MB
+  } While ($VMMemoryStartupBytes -gt $freeRAMbytes)
+}
+
+# Also do a CPU check
+$CPUs = Get-CimInstance Win32_ComputerSystem
+If ($CPUs.NumberOfLogicalProcessors -lt $VMProcessorCount) {
+  Write-Warning "Requested CPU count is higher than available logical processors (${CPUs.NumberOfLogicalProcessors}). Reducing count."
+  $VMprocessorCount = $CPUs.NumberOfLogicalProcessors
+}
+
+# Generate VM / Hostname if blank
+If ($VMName -in $null, '') {
+  $a = $env:computername
+  If ($a -match '-') { 
+    $prefix = $a.split('-')[0] 
+  } Else { 
+    $prefix = $a.substring(0,3) 
+  }
+  $VMName = $prefix + '-' + (Make-Random 6)
+}
+If ($VMHostName -in $null, '') {
+  $VMHostname = $VMName
+}
+# Get host DNS info to use for default network configuration
+$hostNetInfo = Get-DnsInfo
+
+If ($NameServers -in $null, '') {
+  $NameServers = $hostNetInfo.DnsServers
+}
+
+# If no hostname defined, generate a random hostname based on the hosts netbios prefix + some random string
+If ($VMHostname -in $null, '') {
+  $VMHostname = (((Get-CimInstance -ClassName Win32_ComputerSystem).Name).Substring(0,4) -replace '[-_]','') + (Make-Random 6)
+}
+
+ $FQDN = $VMHostname.ToLower() + "." + $hostNetInfo.DomainSuffix.ToLower()
+
+ if ($GuestAdminPassword -in $null, '') {
+    #$GuestAdminPassword = 'Passw0rd'
+    $GuestAdminPassword = Make-Random 8
+    Write-Host "-------------- LOCAL ADMIN -----------------------"
+    Write-Host "Username: $GuestAdminUsername"
+    Write-Host "Password: $GuestAdminPassword"
+    Write-Host ""
+      
+ }
+
 $NetAutoconfig = ($NetAddress         -in $null,'') -and
                  ($NetNetmask         -in $null,'') -and
                  ($NetNetwork         -in $null,'') -and
                  ($NetNetGateway      -in $null,'') -and
                  ($NetNetmask         -in $null,'') -and
-                 ($VMStaticMacAddress -in $null,'')
+                 ($NetMacAddress -in $null,'')
 
 if ($NetAutoconfig -eq $false) {
-  Write-Verbose "Given Network configuration - no checks done in script:"
-  Write-Verbose "VMStaticMacAddress: '$VMStaticMacAddress'"
+  Write-Verbose "-------------- NETWORK CONFIGURATION ------------------"
+  Write-Verbose ""
+  Write-Verbose "VMStaticMacAddress: '$NetMacAddress'"
   Write-Verbose "NetInterface:     '$NetInterface'"
   Write-Verbose "NetAddress:       '$NetAddress'"
   Write-Verbose "NetNetmask:       '$NetNetmask'"
@@ -149,7 +206,6 @@ if ($NetAutoconfig -eq $false) {
 # check if verbose is present, src: https://stackoverflow.com/a/25491281/1155121
 $verbose = $VerbosePreference -ne 'SilentlyContinue'
 
-$FQDN = $VMHostname.ToLower() + "." + $DomainName.ToLower()
 # Instead of GUID, use 26 digit machine id suitable for BIOS serial number
 # src: https://stackoverflow.com/a/67077483/1155121
 # $vmMachineId = [Guid]::NewGuid().ToString()
@@ -169,20 +225,24 @@ If ($virtualSwitchName -notin "",$null) {
     Write-Verbose "Connecting VMnet adapter to virtual switch '$virtualSwitchName'..."
 } else {
   Write-Warning "No Virtual network switch given."
-  $SwitchList = Get-VMSwitch | Select-Object Name
-  If ($SwitchList.Count -eq 1 ) {
-    Write-Warning "Using single Virtual switch found: '$($SwitchList.Name)'"
-    $virtualSwitchName = $SwitchList.Name
-  } elseif (Get-VMSwitch | Select-Object Name | Select-String "Default Switch") {
-    Write-Warning "Multiple Switches found; using found 'Default Switch'"
-    $virtualSwitchName = "Default Switch"
+  $SwitchList = Get-VMSwitch | Where-Object SwitchType -eq 'External'
+  Switch ($SwitchList.Count) {
+    {$_ -gt 1} {
+      $virtualSwitchName = ((Get-VM).NetworkAdapters.SwitchName | Group-Object | Sort-Object Count | Select-Object -last 1).name
+      Write-Warning "Using the most frequently used vSwitch: $virtualSwitchName"  
+    }
+    1 {
+      $virtualSwitchName = $SwitchList.Name
+      Write-Warning "Using the only external vSwitch: $virtualSwitchName"
+    }
+    Default {
+      Write-Warning "Attempting to use Default Switch"
+      $virtualSwitchName = "Default Switch"
+    }
   }
-}
-
-If ($virtualSwitchName -in "",$null) {
-  Write-Warning "No Virtual network switch given and could not automatically selected."
-  Write-Warning "Please use parameter -virtualSwitchName 'Switch Name'."
-  exit 1
+  if ( -not (Get-VMswitch -name $virtualSwitchName)) {
+    Throw "Error using virtual switch $virtualSwitchName"
+  }
 }
 
 # Update this to the release of Image that you want
@@ -200,14 +260,17 @@ Switch ($downloadURL) {
     $ImageFileExtension = 'tar.xz'
     $ImageHashFileName = "SHA512SUMS"
     $ImageManifestSuffix = "json"
+    $imagePackages = 'hyperv-daemons','sudo','vim','ufw','dnsutils','net-tools','curl'
   }
   {$_ -match 'ubuntu'} {
     $ImageOS = 'ubuntu'
     $ImageFileExtension = 'img'
     $ImageHashFileName = "SHA256SUMS"
     $ImageManifestSuffix = "manifest"
+    $imagePackages = 'linux-tools-virtual','linux-cloud-tools-virtual','linux-azure'
   }
 }
+
 
 # URL prefix may be http or https
 $URLprefix = $downloadURL.split(':')[0] 
@@ -264,11 +327,11 @@ Write-Verbose ""
 $net_settings = @{
   NetInterface = $NetInterface
   NetAutoconfig = $NetAutoconfig
-  VMStaticMacAddress = $VMStaticMacAddress
+  VMStaticMacAddress = $NetMacAddress
   NetAddress = $NetAddress
   NetGateway = $NetGateway
   NameServers = ''
-  DomainName = $DomainName
+  DomainName = $VMhostName
   FQDN = $FQDN
 }
 If ( -not $NetAutoconfig ) {
@@ -322,17 +385,19 @@ If ( -not $NetAutoconfig ) {
   }
   Write-Verbose ""
 
-  # userdata for cloud-init, https://cloudinit.readthedocs.io/en/latest/topics/examples.html
+  
 }
 
 <# -------------------------------------------------------- Create Userdata ----------------------------------------------------------------#>
 
+# userdata for cloud-init, https://cloudinit.readthedocs.io/en/latest/topics/examples.html
 $user_settings = @{
   createdDateStamp    = Get-Date -UFormat "%b/%d/%Y %T %Z"
   VMHostname          = $VMHostname
   FQDN                = $FQDN
   TimeZone            = $TimeZone
-  packages            = ''
+  Locale              = $Locale
+  packages            = ("  - " + (($packages + $imagePackages) -join "`n  - "))
   GuestAdminUsername  = $GuestAdminUsername
   GuestAdminPassword  =  $GuestAdminPassword
   SSHkeys             = ''
@@ -340,17 +405,11 @@ $user_settings = @{
   azureWAagentDisable = $azureWAagentDisable
   network_write_files = $network_write_files
   NameServers         = "'" + ($NameServers -join "', '") + "'"
-  DomainName          = $DomainName
+  DomainName          = $hostNetInfo.DomainSuffix.ToLower()
   CloudInitPowerState = $CloudInitPowerState
   KeyboardLayout      = $KeyboardLayout
+  AdditionalRuncmd    = ("  - " + ($additionalRuncmd -join "`n  - "))
 }
-
-$packages = switch ($ImageOS) {
-  "debian" { 'hyperv-daemons' }
-  "ubuntu" { 'linux-tools-virtual','linux-cloud-tools-virtual','linux-azure' }
-  default  { }
-}
-$user_settings.packages = "  - " + ($packages -join "`n  - ")
 
 If ($GuestAdminSshPubKey -notin '', $null) {
   $user_settings.SSHkeys = "    ssh_authorized_keys:`n  - $GuestAdminSshPubKey"
@@ -414,11 +473,20 @@ New-Item -ItemType Directory -Path "$($tempPath)\Bits" | Out-Null
 #Write-Host $metadata
 
 # Set-Content syntax changed in powershell 6. Now it uses -AsByteStream. use -Encoding Byte for powershell 5
-Set-Content "$($tempPath)\Bits\meta-data" ([byte[]][char[]] "$metadata") -AsByteStream #-Encoding Byte
-If (($NetAutoconfig -eq $false) -and($NetConfigType -in 'v1','v2')) {
-  Set-Content "$($tempPath)\Bits\network-config" ([byte[]][char[]] "$networkconfig") -AsByteStream #-Encoding Byte
+If ($PSVersionTable.PSVersion.Major -ge 6) {
+  $cSplat = @{
+    AsByteStream = $true
+  }
+} else {
+  $cSplat = @{
+    Encoding = 'Byte'
+  }
 }
-Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") -AsByteStream #-Encoding Byte
+Set-Content "$($tempPath)\Bits\meta-data" ([byte[]][char[]] "$metadata") @cSplat
+If (($NetAutoconfig -eq $false) -and($NetConfigType -in 'v1','v2')) {
+  Set-Content "$($tempPath)\Bits\network-config" ([byte[]][char[]] "$networkconfig") @cSplat
+}
+Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") @cSplat
 If ($ImageTypeAzure) {
   $ovfenvxml.Save("$($tempPath)\Bits\ovf-env.xml");
 }
@@ -455,20 +523,18 @@ New-Item -ItemType Directory -Path $ImageCachePath -Force | Out-Null
 $imageFilenameExt = "${ImageFileName}.${ImageFileExtension}"
 $imageLocalPath = "${ImageCachePath}\${ImageFileNameExt}"
 
-Try {
-  $checksum = Fetch-Checksums $ImageHashURL | Where-Object { $_.filename -eq $imageFilenameExt }
-}
+Try   { $checksum = Fetch-Checksums $ImageHashURL | Where-Object { $_.filename -eq $imageFilenameExt } }
 Catch {
   If ($skipChecksum) {
     Write-Warning "Error fetching checksums from $imageHashURL, but SkipChecksum specified so we'll continue"
-  } else {
+  } Else {
     Throw "Error fetching checksums from $imageHashURL $_" 
   }
 }
 Switch -Wildcard ($ImageHashFilename) {
   '*SHA256*' { $hashAlgo = "SHA256" }
   '*SHA512*' { $hashAlgo = "SHA512" }
-  default    { Throw "$ImageHashFilename hashing algorithm not supported." }
+  Default    { Throw "$ImageHashFilename hashing algorithm not supported." }
 }
 Write-Host $hashAlgo
 
@@ -586,6 +652,9 @@ Catch {
   #Rename-Item -path "$($ImageCachePath)\$ImageFileName.vhd" -newname "$($ImageCachePath)\$($ImageOS)-$($stamp).vhd" # not VHDX
   Write-Host -ForegroundColor Green " Done."
 }
+
+Resize-VHD -path $ImageVHDfinal -SizeBytes $VHDSizeBytes
+
 If ($ConvertImageToNoCloud) {
   Write-Host 'Modify VHD and convert cloud-init to NoCloud ...' 
   $noCloudSplat = @{
@@ -632,7 +701,7 @@ Catch {
 }
 
 <# -------------------------------------------------------- Create Virtual Machine ---------------------------------------------------------------- #>
-
+Write-Host "--------------------- $VMMemoryStartupBytes MB ---------------------"
 # Create new virtual machine and start it
 $vmSplat = @{
   Name = $VMName
@@ -660,9 +729,9 @@ Connect-VMNetworkAdapter -VMName $VMName -SwitchName "$virtualSwitchName"
 
 
 
-If ($VMStaticMacAddress -notin $null,'') {
-  Write-Verbose "Setting static MAC address '$VMStaticMacAddress' on VMnet adapter..."
-  Set-VMNetworkAdapter -VMName $VMName -StaticMacAddress $VMStaticMacAddress
+If ($NetMacAddress -notin $null,'') {
+  Write-Verbose "Setting static MAC address '$NetMacAddress' on VMnet adapter..."
+  Set-VMNetworkAdapter -VMName $VMName -StaticMacAddress $NetMacAddress
 } Else {
   Write-Verbose "Using default dynamic MAC address asignment."
 }
