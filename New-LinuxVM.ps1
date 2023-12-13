@@ -74,6 +74,9 @@ param (
   [uint64] $VMMinimumBytes = $VMMemoryStartupBytes,
   [uint64] $VMMaximumBytes = $VMMemoryStartupBytes,
   [uint64] $VHDSizeBytes = 16GB,
+  [switch] $VMdataVol = $false,
+  [uint64] $VMdataVolSizeBytes = 64GB,
+  [string] $VMdataVolMountPoint = '/mnt/data',
   [string] $VirtualSwitchName = $null,
   [string] $VMVlanID = $null,
   [string] $VMNativeVlanID = $null,
@@ -87,10 +90,8 @@ param (
   #[switch] $VMMaximumBandwidth = $null,
   [switch] $VMMacAddressSpoofing = $false,
   [switch] $VMExposeVirtualizationExtensions = $false,
-  #[string] $VMVersion = "8.0", # version 8.0 for hyper-v 2016 compatibility , check all possible values with Get-VMHostSupportedVersion
   [string] $VMVersion = (Get-VMHostSupportedVersion | Where-Object IsDefault).Version,
   [string] $VMHostname,
-  [string] $VMMachine_StoragePath = $null, # if defined setup machine path with storage path as subfolder
   [string] $VMpath = $null, # if not defined here default Virtal Machine path is used
   [string] $VHDpath = $null # if not defined here Hyper-V settings path / fallback path is set below
 )
@@ -155,7 +156,7 @@ If ($VMName -in $null, '') {
   } Else { 
     $prefix = $a.substring(0,3) 
   }
-  $VMName = $prefix + '-' + (Make-Random 6)
+  $VMName = $prefix + '-' + (Make-Random 6 -hex)
 }
 If ($VMHostName -in $null, '') {
   $VMHostname = $VMName
@@ -409,8 +410,12 @@ $user_settings = @{
   CloudInitPowerState = $CloudInitPowerState
   KeyboardLayout      = $KeyboardLayout
   AdditionalRuncmd    = ("  - " + ($additionalRuncmd -join "`n  - "))
+  Mounts              = ''
 }
 
+If ($VMdataVol) {
+  $user_settings.Mounts = "mounts:`n  - [ sdb, $VMdataVolMountPoint ]"
+}
 If ($GuestAdminSshPubKey -notin '', $null) {
   $user_settings.SSHkeys = "    ssh_authorized_keys:`n  - $GuestAdminSshPubKey"
 }
@@ -719,6 +724,18 @@ Set-VMProcessor -VMName $VMName -Count $VMProcessorCount
 Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $VMDynamicMemoryEnabled
 If ($VMDynamicMemoryEnabled) {
   Set-VMMemory -VMName $VMName -MaximumBytes $VMMaximumBytes -MinimumBytes $VMMinimumBytes
+}
+
+# Data volume
+If ($VMDataVol) {
+  $vSplat = @{
+    Path = "$VHDpath\$VMName-data.vhdx"
+    SizeBytes = $VMdataVolSizeBytes
+    Dynamic = $true
+  }
+  New-VHD @vSplat
+  Add-VMHardDiskDrive -VMName $VMName -Path $vSplat.Path
+  
 }
 # make sure VM has DVD drive needed for provisioning
 If ( -not (Get-VMDvdDrive -VMName $VMName)) {

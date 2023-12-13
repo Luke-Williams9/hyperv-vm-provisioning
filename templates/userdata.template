@@ -145,6 +145,9 @@ write_files:
     path: /etc/docker/daemon.json
 !!@network_write_files@!!
 
+mount_default_fields: [ None, None, "auto", "defaults,nofail", "0", "2" ]
+!!@mounts@!!
+
 
 manage_etc_hosts: true
 manage_resolv_conf: true

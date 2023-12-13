@@ -141,8 +141,21 @@ Function Cleanup-VM {
     }
 }
 Function Make-Random {
-    Param  ( [parameter(position=0)][int]$count = 10 )
-    Return (-join ((0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A) | Get-Random -Count $count | Foreach-Object {[char]$_}))
+    Param  ( 
+        [parameter(position=0)][int]$count = 10,
+        [switch]$uppercase,
+        [switch]$hex
+    )
+    if ($hex) {
+        $charset = (0x30..0x39) + ( 0x41..0x47)
+    } else {
+        $charset = (0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A)
+    }
+    $result = (-join ($charset | Get-Random -Count $count | Foreach-Object {[char]$_}))
+    if ($uppercase) {
+        $result = $result.ToUpper()
+    }
+    Return $result
 }
 
 
