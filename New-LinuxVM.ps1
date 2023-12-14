@@ -40,9 +40,10 @@ param (
 # [string] $DownloadURL = 'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.tar.xz',
   [string] $DownloadURL = "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img",
   [switch] $Force = $false,
+  [Parameter()][Alias("user","username","u")]
   [string] $GuestAdminUsername = "admin",
-# [string] $GuestAdminPassword = $null, # Run randomStringFunction - optional fallback to 'passw0rd' or something else simple
-  [string] $GuestAdminPassword = "Passw0rd",
+  [Parameter()][Alias("password","pass","p")]
+  [string] $GuestAdminPassword,
   [string] $GuestAdminSshPubKey,
 # [string] $imageOS = 'debian',
   [string] $imageOS = $null,
@@ -51,7 +52,7 @@ param (
   [string] $KeyboardModel, # default: "pc105"
   [string] $KeyboardOptions, # example: "compose:rwin"
   [string] $Locale = ((Get-Culture).Name.replace('-','_')) + '.UTF-8', # "en_US.UTF-8",
-  [string] $NetMacAddress = $null,
+  [string] $NetMacAddress,
   [string] $NetInterface  = "eth0",
   [string] $NetAddress,
   [string] $NetNetmask,
@@ -64,12 +65,14 @@ param (
   [switch] $ShowVmConnectWindow = $false,
   [switch] $userDataTest = $false,
   [string] $tempRoot = "${env:systemdrive}\hvtemp",
-  # [string] $TimeZone = "Etc/GMT" + [string](Get-Timezone).BaseUTCoffset.hours,
-  [string] $TimeZone = "UTC", # UTC or continental zones of IANA DB like: Europe/Berlin. Fuck IANA timezones. how the hell did those nerds make it so complicated? its just gmt + or - an integer FFS
+  [string] $TimeZone, # UTC or continental zones of IANA DB like: Europe/Berlin. https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+  [Parameter()][Alias("name")]
   [string] $VMName,
   [int]    $VMGeneration = 1, # create gen1 hyper-v machine because of portability to Azure (https://docs.microsoft.com/en-us/azure/virtual-machines/windows/prepare-for-upload-vhd-image)
+  [Parameter()][Alias("CPU","CPUcores","Cores")]
   [int]    $VMProcessorCount = 2,
   [bool]   $VMDynamicMemoryEnabled = $false,
+  [Parameter()][Alias("RAM","Memory")]
   [uint64] $VMMemoryStartupBytes = 1024MB,
   [uint64] $VMMinimumBytes = $VMMemoryStartupBytes,
   [uint64] $VMMaximumBytes = $VMMemoryStartupBytes,
@@ -77,23 +80,23 @@ param (
   [switch] $VMdataVol = $false,
   [uint64] $VMdataVolSizeBytes = 64GB,
   [string] $VMdataVolMountPoint = '/mnt/data',
-  [string] $VirtualSwitchName = $null,
-  [string] $VMVlanID = $null,
-  [string] $VMNativeVlanID = $null,
-  [string] $VMAllowedVlanIDList = $null,
-  [switch] $VMVMQ = $false,
-  [switch] $VMDhcpGuard = $false,
-  [switch] $VMRouterGuard = $false,
+  [Parameter()][Alias("vSwitch")]
+  [string] $VirtualSwitchName,
+  [Parameter()][Alias("vlan")]
+  [string] $VMVlanID,
+  [string] $VMNativeVlanID,
+  [string] $VMAllowedVlanIDList,
+  [switch] $VMVMQ,
+  [switch] $VMDhcpGuard,
+  [switch] $VMRouterGuard,
   [switch] $VMPassthru = $false,
-  #[switch] $VMMinimumBandwidthAbsolute = $null,
-  #[switch] $VMMinimumBandwidthWeight = $null,
-  #[switch] $VMMaximumBandwidth = $null,
   [switch] $VMMacAddressSpoofing = $false,
   [switch] $VMExposeVirtualizationExtensions = $false,
   [string] $VMVersion = (Get-VMHostSupportedVersion | Where-Object IsDefault).Version,
+  [Parameter()][Alias("hostname")]
   [string] $VMHostname,
-  [string] $VMpath = $null, # if not defined here default Virtal Machine path is used
-  [string] $VHDpath = $null # if not defined here Hyper-V settings path / fallback path is set below
+  [string] $VMpath, # if not defined here default Virtal Machine path is used
+  [string] $VHDpath # if not defined here Hyper-V settings path / fallback path is set below
 )
 
 $ErrorActionPreference = 'Stop'
@@ -126,19 +129,24 @@ $qemuImgPath = Join-Path $PSScriptRoot "tools\qemu-img\qemu-img.exe"
 # Windows version of tar for extracting tar.gz files, src: https://github.com/libarchive/libarchive
 $bsdtarPath = Join-Path $PSScriptRoot "tools\bsdtar.exe"
 
-#if ($userDataTest) {
-  $verbose = $true
-#}
-
 # RAM check - leave 1GB free on the host
 $freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum) #/ 1024MB
-
-
-if ($VMMemoryStartupBytes -gt $freeRAMbytes) {
+If ($VMMemoryStartupBytes -gt $freeRAMbytes) {
   Write-Warning "Requested memory ($VMMemoryStartupBytes) exceeds available host memory ($freeRAMbytes)."  
   Do {
     $VMMemoryStartupBytes -= 128MB
   } While ($VMMemoryStartupBytes -gt $freeRAMbytes)
+}
+
+# Time Zone
+if ($TimeZone -in $null, '') {
+  $baseTZ = (Get-Timezone).BaseUTCoffset.hours
+  if ($baseTZ -ge 0) {
+    $tzPre = '-'
+  } else {
+    $tzPre = '+'
+  }
+  $TimeZone = 'Etc/GMT' + $tzPre + [string]([math]::abs($baseTZ))
 }
 
 # Also do a CPU check
@@ -215,7 +223,9 @@ $rSplat = @{
   Maximum = 9999999999999999
 }
 $VmMachineId = "{0:####-####-####-####}-{1:####-####-##}" -f (Get-Random @rSplat),(Get-Random @rSplat)
-$tempPath = "$tempRoot\temp\${vmMachineId}"
+$tp = Join-Path $tempRoot "temp"
+$tempPath = Join-Path $tp $vmMachineId
+Remove-Item -path $tp -recurse -force -confirm:$false -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -path $tempPath -force | Out-Null
 Write-Verbose "Using temp path: $tempPath"
 
@@ -513,20 +523,24 @@ $oscdimgSplat = @{
 }
 Start-Process @oscdimgSplat
 
-If (!(test-path "$metaDataIso")) {throw "Error creating metadata iso"}
+If ( -not (test-path "$metaDataIso") ) {
+  Throw "Error creating metadata iso"
+}
 Write-Verbose "Metadata iso written"
 Write-Host -ForegroundColor Green " Done."
 
 <# -------------------------------------------------------- Download and parse checksum file ----------------------------------------------------------------#>
 
-Write-Host $imageHashFileName
-Write-Host $imageHashURL
-# storage location for base images
+# Storage path for base images
 $ImageCachePath = Join-Path $tempRoot "BaseImages"
 New-Item -ItemType Directory -Path $ImageCachePath -Force | Out-Null
-# $imageFilename = "${ImageFileName}.${ImageFileExtension}"
 $imageFilenameExt = "${ImageFileName}.${ImageFileExtension}"
-$imageLocalPath = "${ImageCachePath}\${ImageFileNameExt}"
+# Full path + filename for downloaded image
+$ImageFilePath = Join-Path $ImageCachePath $ImageFileNameExt
+
+# Intermediate path to unzipped image - it should go into a newly created folder which contains nothing else
+$imageUnzipPath = Join-Path $tempPath "imageTemp"
+New-Item -ItemType Directory -Path $imageUnzipPath -Force | Out-Null
 
 Try   { $checksum = Fetch-Checksums $ImageHashURL | Where-Object { $_.filename -eq $imageFilenameExt } }
 Catch {
@@ -546,27 +560,27 @@ Write-Host $hashAlgo
 <# -------------------------------------------------------- Download and verify image ----------------------------------------------------------------#>
 
 # If image of same name is present, check If checksum matches. Delete If not matched
-If (Test-Path $imageLocalPath) {
-  Write-Verbose "Found cached image: $imageLocalPath"
-  $c = (Get-FileHash $imageLocalPath -Algorithm $hashAlgo).Hash
+If (Test-Path $ImageFilePath) {
+  Write-Verbose "Found cached image: $ImageFilePath"
+  $c = (Get-FileHash $ImageFilePath -Algorithm $hashAlgo).Hash
   If ($c -eq $checksum.checksum) {
     Write-Verbose "Checksum matches - Using cached image"
   } Else {
     Write-Verbose "Checksum does not match - Redownloading image"
-    Remove-Item $imageLocalPath -Confirm:$false
+    Remove-Item $ImageFilePath -Confirm:$false
   }
 }
 
 # If image not found, download
-If ( -not (Test-Path $imageLocalPath) ) {
+If ( -not (Test-Path $ImageFilePath) ) {
   Write-Verbose "Downloading image: $downloadURL"
-  Invoke-WebRequest $downloadURL -OutFile $imageLocalPath -UseBasicParsing
+  Invoke-WebRequest $downloadURL -OutFile $ImageFilePath -UseBasicParsing
 }
 
 # Check If checksum matches, If it fails, then error out
-$c = (Get-FileHash $imageLocalPath -Algorithm $hashAlgo).Hash
+$c = (Get-FileHash $ImageFilePath -Algorithm $hashAlgo).Hash
 If ( $c -ne $checksum.checksum) {
-  Throw "Checksum mismatch on newly downloaded file $($imageLocalPath) `r`n$($checksum.Checksum)`r`n$c" 
+  Throw "Checksum mismatch on newly downloaded file $($ImageFilePath) `r`n$($checksum.Checksum)`r`n$c" 
 }
 
 
@@ -586,18 +600,21 @@ Switch ($ImageFileExtension) {
     #& $bsdtarPath "-x -C `"$($ImageCachePath)`" -f `"$($ImageCachePath)\$($ImageOS)-$($stamp).$($ImageFileExtension)`""
     $tarSplat = @{
       FilePath = $bsdtarPath
-      ArgumentList = '-x','-C', "`"$($ImageCachePath)`"",'-f', "`"$imageLocalPath`""
+      ArgumentList = '-x','-C', "`"$($imageUnzipPath)`"",'-f', "`"$ImageFilePath`""
       Wait = $true 
       NoNewWindow = $true
       RedirectStandardOutput = "$($tempPath)\bsdtar.log"
     }
+    $tarSplat | FL | Out-String
+    
     Start-Process @tarSplat
   }
   'zip' { 
-    Expand-Archive $imageLocalPath -DestinationPath $imageCachePath -Force
+    Expand-Archive $ImageFilePath -DestinationPath $imageUnzipPath -Force
   }
   'img' {
-    Write-Verbose 'No need for archive extracting'
+    # Put it in the intermediate folder even though it doesn't need to be unzipped
+    Copy-Item $ImageFilePath -DestinationPath $imageUnzipPath -Force
   }
   default { 
     Throw "Unsupported image in archive - $ImageFileExtension"
@@ -606,7 +623,8 @@ Switch ($ImageFileExtension) {
 
 <# -------------------------------------------------------- Convert Image to VHD ---------------------------------------------------------------- #>
 
-$fileExpanded = Get-ChildItem "$($ImageCachePath)\*.vhd","$($ImageCachePath)\*.vhdx","$($ImageCachePath)\*.raw","$($ImageCachePath)\*.img" -File | Sort-Object LastWriteTime | Select-Object -last 1
+# There should be only a single image file in $imageUnzipPath
+$fileExpanded = Get-ChildItem $imageUnzipPath 
 
 Switch -Wildcard ($fileExpanded) {
   '*.vhd' {
@@ -618,7 +636,6 @@ Switch -Wildcard ($fileExpanded) {
     Write-Verbose "qemu-img convert to vhd"
     Write-Verbose "$qemuImgPath convert -f raw $fileExpanded -O vpc $($imageVHD)"
     & $qemuImgPath convert -f raw "$fileExpanded" -O vpc "$($imageVHD)"
-    Remove-Item "$fileExpanded" -force
   }
   '*img' {
     Write-Host "qemu-img info for source untouched cloud image: "
@@ -626,13 +643,13 @@ Switch -Wildcard ($fileExpanded) {
     Write-Verbose "qemu-img convert to vhd"
     Write-Verbose "$qemuImgPath convert -f qcow2 $fileExpanded -O vpc $($ImageVHD)"
     & $qemuImgPath convert -f qcow2 "$fileExpanded" -O vpc "$($ImageVHD)"
-    # remove source image after conversion
-    # Remove-Item "$fileExpanded" -force
   }
   default {
     Throw "Unsupported disk image extracted."
   }
 }
+# Remove intermediate image
+Remove-Item "$fileExpanded" -force -confirm:$false
 
 Write-Host -ForegroundColor Green " Done."
 
