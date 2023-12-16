@@ -268,7 +268,7 @@ If ($virtualSwitchName -notin "",$null) {
 
 <# -------------------------------------------------------- Image URL and local path variables ----------------------------------------------------------------#>
 
-$distros = Get-Content distros.json | ConvertFrom-JSON -depth 100
+$distros = Get-Content distros.json | ConvertFrom-JSON
 If ($downloadURL -in $null, '') {
   $a = $distros | where-object { $_.ImageOS -eq $ImageOS }
   if ($a -in $null,'') {
@@ -500,14 +500,6 @@ If ($ImageTypeAzure) {
 # Make temp location for iso image
 New-Item -ItemType Directory -Path "$($tempPath)\Bits" | Out-Null
 
-#$metadata | export-clixml "metadata.xml"
-# Output metadata, networkconfig and userdata to file on disk
-#Write-Host "----------------------------"
-#Write-Host "Temppath: $tempPath"
-#Write-Host "-------------------------------------------"
-#Write-Host "metadata:"
-#Write-Host $metadata
-
 # Set-Content syntax changed in powershell 6. Now it uses -AsByteStream. use -Encoding Byte for powershell 5
 If ($PSVersionTable.PSVersion.Major -ge 6) {
   $cSplat = @{
@@ -530,8 +522,9 @@ If ($ImageTypeAzure) {
 # Create meta data ISO image, src: https://cloudinit.readthedocs.io/en/latest/topics/datasources/nocloud.html
 # both azure and nocloud support same cdrom filesystem 
 # https://github.com/canonical/cloud-init/blob/606a0a7c278d8c93170f0b5fb1ce149be3349435/cloudinit/sources/DataSourceAzure.py#L1972
-Write-Host "Creating metadata iso for VM provisioning - " 
+ 
 $metaDataIso = "$($VHDpath)\$($VMName)-metadata.iso"
+Write-Host "Creating metadata iso for VM provisioning"
 Write-Verbose "Filename: $metaDataIso"
 cleanupFile $metaDataIso
 
@@ -626,8 +619,7 @@ Switch ($ImageFileExtension) {
       NoNewWindow = $true
       RedirectStandardOutput = "$($tempPath)\bsdtar.log"
     }
-    $tarSplat | FL | Out-String
-    
+  
     Start-Process @tarSplat
   }
   'zip' { 
@@ -645,7 +637,7 @@ Switch ($ImageFileExtension) {
 <# -------------------------------------------------------- Convert Image to VHD ---------------------------------------------------------------- #>
 
 # There should be only a single image file in $imageUnzipPath
-$fileExpanded = Get-ChildItem $imageUnzipPath 
+$fileExpanded = (Get-ChildItem $imageUnzipPath).fullname
 
 Switch -Wildcard ($fileExpanded) {
   '*.vhd' {
@@ -744,7 +736,7 @@ Catch {
 }
 
 <# -------------------------------------------------------- Create Virtual Machine ---------------------------------------------------------------- #>
-Write-Host "--------------------- $VMMemoryStartupBytes MB ---------------------"
+
 # Create new virtual machine and start it
 $vmSplat = @{
   Name = $VMName
