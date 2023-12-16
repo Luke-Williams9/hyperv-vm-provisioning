@@ -1,0 +1,50 @@
+[
+  {
+    "ImageOS": "debian",
+    "ImageFileExtension": "tar.xz",
+    "ImageHashFileName": "SHA512SUMS",
+    "ImageManifestSuffix": "json",
+    "ImagePackages": [
+      "hyperv-daemons",
+      "sudo",
+      "vim",
+      "ufw",
+      "dnsutils",
+      "net-tools",
+      "curl"
+    ],
+    "ImageDefaultVersion": "12",
+    "imageVersionTable": {
+      "12": "bookworm",
+      "11": "bullseye",
+      "10": "buster"
+    },
+    "ImageDownloadURLS": {
+      "12": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.tar.xz",
+      "11": "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-genericcloud-amd64.tar.xz",
+      "10": "https://cloud.debian.org/images/cloud/buster/latest/debian-10-genericcloud-amd64.tar.xz"
+    }
+  },
+  {
+    "ImageOS": "ubuntu",
+    "ImageFileExtension": "img",
+    "ImageHashFileName": "SHA256SUMS",
+    "ImageManifestSuffix": "manifest",
+    "imagePackages": [
+      "linux-tools-virtual",
+      "linux-cloud-tools-virtual",
+      "linux-azure"
+    ],
+    "ImageDefaultVersion": "22",
+    "imageVersionTable": {
+      "22": "jammy",
+      "20": "focal",
+      "18": "bionic"
+    },
+    "ImageDownloadURLS": {
+      "22": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
+      "20": "https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img",
+      "18": "https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"
+    }
+  }
+]

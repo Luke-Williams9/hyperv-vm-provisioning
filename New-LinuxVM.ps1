@@ -38,7 +38,8 @@ param (
   [string] $CloudInitPowerState = "reboot", # poweroff, halt, or reboot , https://cloudinit.readthedocs.io/en/latest/reference/modules.html#power-state-change
   [string] $CustomUserDataYamlFile,
 # [string] $DownloadURL = 'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.tar.xz',
-  [string] $DownloadURL = "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img",
+# [string] $DownloadURL = "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img",
+  [string] $DownloadURL, 
   [switch] $Force = $false,
   [Parameter()][Alias("user","username","u")]
   [string] $GuestAdminUsername = "admin",
@@ -46,7 +47,10 @@ param (
   [string] $GuestAdminPassword,
   [string] $GuestAdminSshPubKey,
 # [string] $imageOS = 'debian',
-  [string] $imageOS = $null,
+  [Parameter()][Alias("distro","distroName")]  
+  [string] $imageOS = 'debian',
+  [Parameter()][Alias("version",'distroVersion','ver')]
+  [string] $ImageVersion,
   [bool]   $ImageTypeAzure = $false,
   [string] $KeyboardLayout = "us", # 2-letter country code, for more info https://wiki.archlinux.org/title/Xorg/Keyboard_configuration
   [string] $KeyboardModel, # default: "pc105"
@@ -264,24 +268,41 @@ If ($virtualSwitchName -notin "",$null) {
 
 <# -------------------------------------------------------- Image URL and local path variables ----------------------------------------------------------------#>
 
-Write-Host $downloadURL
-Switch ($downloadURL) {
-  {$_ -match 'debian'} {
-    $ImageOS = 'debian'
-    $ImageFileExtension = 'tar.xz'
-    $ImageHashFileName = "SHA512SUMS"
-    $ImageManifestSuffix = "json"
-    $imagePackages = 'hyperv-daemons','sudo','vim','ufw','dnsutils','net-tools','curl'
+$distros = Get-Content distros.json | ConvertFrom-JSON -depth 100
+If ($downloadURL -in $null, '') {
+  $a = $distros | where-object { $_.ImageOS -eq $ImageOS }
+  if ($a -in $null,'') {
+    Throw "Error reading distros.json $distros"
+    Exit 1
   }
-  {$_ -match 'ubuntu'} {
-    $ImageOS = 'ubuntu'
-    $ImageFileExtension = 'img'
-    $ImageHashFileName = "SHA256SUMS"
-    $ImageManifestSuffix = "manifest"
-    $imagePackages = 'linux-tools-virtual','linux-cloud-tools-virtual','linux-azure'
+  Write-Verbose "Selected distro:"
+  Write-Verbose ($a | Format-List | Out-String)
+  $ImageOS = $a.ImageOS
+  $ImageFileExtension = $a.ImageFileExtension
+  $ImageHashFileName = $a.ImageHashFileName
+  $ImageManifestSuffix = $a.ImageManifestSuffix
+  $imagePackages = $a.imagePackages
+  $downloadURL = $a.ImageDownloadURLS.($a.ImageDefaultVersion)
+  Write-Host "Download URL: $downloadURL"
+  If ($ImageVersion) {
+    If ($ImageVersion -match "^\w+$") {
+      # $imageVersion is likely a name, ie jammy, focal, bullseye. Look up numbered version
+      $imgv = ($a.imageVersionTable.PSObject.properties | Where-Object {$_.Value -eq 'focal'}).name
+      If ($imgv) {
+        Write-Verbose "Using image version: $ImageVersion"
+        $ImageVersion = $imgv
+      }   
+    }
+    $downloadURL = $a.ImageDownloadURLS.$ImageVersion
   }
+
+}
+If ($downloadURL -in $null, '') {
+  Throw "Error getting download URL"
+  Exit 1
 }
 
+Write-Host "Download URL: $downloadURL"
 
 # URL prefix may be http or https
 $URLprefix = $downloadURL.split(':')[0] 
@@ -614,7 +635,7 @@ Switch ($ImageFileExtension) {
   }
   'img' {
     # Put it in the intermediate folder even though it doesn't need to be unzipped
-    Copy-Item $ImageFilePath -DestinationPath $imageUnzipPath -Force
+    Copy-Item $ImageFilePath -Destination $imageUnzipPath -Force
   }
   default { 
     Throw "Unsupported image in archive - $ImageFileExtension"
