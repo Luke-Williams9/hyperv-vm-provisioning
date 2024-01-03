@@ -3,12 +3,15 @@
   Provision Cloud images on Hyper-V
   All defaults are set. Running the script without any parameters will create a Debian Bookworm VM
 .EXAMPLE
+  .\New-LinuxVM.ps1 -name 'teste20' -IP "10.2.2.180" -verbose
   PS C:\> .\New-LinuxVM.ps1
   PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 60GB -VMName "azure-1" -ImageVersion "20.04" -VirtualSwitchName "SW01" -VMGeneration 2
   PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 8GB -VMName "debian11" -ImageVersion 11 -virtualSwitchName "External Switch" -VMGeneration 2 -GuestAdminUsername admin -GuestAdminPassword admin -VMMachine_StoragePath "D:\Hyper-V\" -NetAddress 192.168.188.12 -NetNetmask 255.255.255.0 -NetGateway 192.168.188.1 -NameServers "192.168.188.1"
   It should download cloud image and create VM, please be patient for first boot - it could take 10 minutes
   and requires network connection on VM
 .NOTES
+  Was having problems with static network configuration, particularly with debian bookworm. I'm starting by going back to the basics, essentially commenting out anything I don't understand :D
+
   Original script: https://blogs.msdn.microsoft.com/virtual_pc_guy/2015/06/23/building-a-daily-ubuntu-image-for-hyper-v/
 
   This projected Forked from: https://github.com/schtritoff/hyperv-vm-provisioning
