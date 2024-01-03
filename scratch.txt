@@ -1,0 +1,1 @@
+"C:\Program Files\Backup Manager\ClientTool.exe" bm-ui.open
