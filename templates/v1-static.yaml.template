@@ -26,6 +26,3 @@ config:
   - type: nameserver
     address: [!!@NameServers@!!]
     search:  [!!@DomainName@!!]
-
-
-

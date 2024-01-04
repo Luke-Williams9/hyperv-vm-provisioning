@@ -62,7 +62,7 @@ param (
   [string] $NetNetwork,
   [string] $NetGateway,
   [array]  $NameServers,
-  [string] $NetConfigType = "v2", # ENI, v1, v2, ENI-file, dhclient
+  [string] $NetConfigType = "v2", # ENI, v1, v2, ENI-file, dhclient 
   [switch] $NoStart, # Set to True to prevent starting the VM at the end of the script
   [array]  $packages = '',#@('python3','pip','docker','docker-compose'),
   [switch] $ShowSerialConsoleWindow = $false,
@@ -134,7 +134,7 @@ $qemuImgPath = Join-Path $PSScriptRoot "tools\qemu-img\qemu-img.exe"
 $bsdtarPath = Join-Path $PSScriptRoot "tools\bsdtar.exe"
 
 # RAM check - leave 1GB free on the host
-$freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum) #/ 1024MB
+$freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum)
 If ($VMMemoryStartupBytes -gt $freeRAMbytes) {
   Write-Warning "Requested memory ($VMMemoryStartupBytes) exceeds available host memory ($freeRAMbytes)."  
   Do {
@@ -198,9 +198,7 @@ If ($VMHostname -in $null, '') {
 
  }
 
-<#
-.\New-LinuxVM.ps1 -name 'teste1' -IP '10.2.2.161' -verbose
-#>
+
 $NetAutoconfig = ($NetAddress    -in $null,'') -and
                  ($NetNetmask    -in $null,'') -and
                  ($NetNetwork    -in $null,'') -and
@@ -215,8 +213,24 @@ if ($NetAutoconfig -eq $false) {
     Write-Error "No static IP address specified. Use -NetAddress to specify an IP address."
     Exit 1
   }
+
+  $nSplit = $NetAddress.split('/')
+  Switch ($nSplit.count) {
+    {$_ -gt 2} {
+      Write-Error "IP CIDR not valid...?"
+      Write-Error $_
+      Exit 1
+    }
+    {$_ -eq 2} {
+      $netAddress = $nSplit[0]
+      $netMaskbits = $nSplit[1]
+    }
+    {$_ -le 1} {
+      $netMaskbits = '24'
+    }
+  }
   If ( -not $NetNetmask) {
-    Write-Verbose "No subnet mask specified, assuming /24"
+    Write-Verbose "No subnet mask specified, assuming 255.255.255.0"
     $NetNetmask = '255.255.255.0'
   }
 
@@ -229,6 +243,7 @@ if ($NetAutoconfig -eq $false) {
   Write-Verbose "NetInterface:     '$NetInterface'"
   Write-Verbose "NetAddress:       '$NetAddress'"
   Write-Verbose "NetNetmask:       '$NetNetmask'"
+  Write-Verbose "NetNetmaskbits:   '$netMaskbits'"
   Write-Verbose "NetNetwork:       '$NetNetwork'"
   Write-Verbose "NetGateway:       '$NetGateway'"
   Write-Verbose ""
@@ -305,16 +320,18 @@ If ($downloadURL -in $null, '') {
   $ImageManifestSuffix = $a.ImageManifestSuffix
   $imagePackages = $a.imagePackages
   $downloadURL = $a.ImageDownloadURLS.($a.ImageDefaultVersion)
+  if ($a.NetConfigType -notIn '',$null) {
+    $NetConfigType = $a.NetConfigType
+  }
   Write-Host "Download URL: $downloadURL"
   If ($ImageVersion) {
     If ($ImageVersion -match "^\w+$") {
-      # $imageVersion is likely a name, ie jammy, focal, bullseye. Look up numbered version
-      $imgv = ($a.imageVersionTable.PSObject.properties | Where-Object {$_.Value -eq 'focal'}).name
+      $imgv = ($a.imageVersionTable.PSObject.properties | Where-Object {$_.Value -eq $ImageVersion}).name
       If ($imgv) {
-        Write-Verbose "Using image version: $ImageVersion"
         $ImageVersion = $imgv
       }   
     }
+    Write-Verbose "Using image version: $ImageVersion"
     $downloadURL = $a.ImageDownloadURLS.$ImageVersion
   }
 
@@ -384,6 +401,7 @@ $net_settings = @{
   VMStaticMacAddress = $NetMacAddress
   NetAddress = $NetAddress
   NetNetmask = $NetNetmask
+  Netmaskbits = $Netmaskbits
   NetNetwork = $NetNetwork
   NetGateway = $NetGateway
   NameServers = ''
@@ -408,9 +426,8 @@ If ( -not $NetAutoconfig ) {
       $tPath = Join-Path $PSScriptRoot "templates\v1-static.template" 
     }
     "v2" {
-      #$net_settings.NameServers = ("  - " + (($NameServers | Where-Object {$_ -notin '',$null}) -join "`n  - "))
-      $net_settings.NameServers = ('[' + (($NameServers | Where-Object {$_ -notin '',$null}) -join ", ") + ']')
-      $net_settings.SearchDomain = ('[' + (($searchDomain | Where-Object {$_ -notin '',$null}) -join ", ") + ']')
+      $net_settings.NameServers = ((($NameServers | Where-Object {$_ -notin '',$null}) -join ", "))
+      $net_settings.SearchDomain = ((($searchDomain | Where-Object {$_ -notin '',$null}) -join ", "))
       $tPath = Join-Path $PSScriptRoot "templates\v2.yaml.template"
     }
     "ENI" { 
@@ -422,11 +439,12 @@ If ( -not $NetAutoconfig ) {
     "dhclient" {
       $tPath = Join-Path $PSScriptRoot "templates\dhclient.template"
     }
-    {$_ -in "v1", "ENI"} {
+    {$_ -in "v1","v2", "ENI"} {
       $networkconfig = Render-Template -TemplateFilePath $tPath -Variables $net_settings
     }
-    {$_ -in "ENI-file","v2","dhclient"} {
+    {$_ -in "ENI-file","dhclient"} {
       $network_write_files = Render-Template -TemplateFilePath $tPath -Variables $net_settings
+      
     }
     default {
       Write-Warning "No network configuration version type defined for static IP address setup."
@@ -538,9 +556,9 @@ If ($PSVersionTable.PSVersion.Major -ge 6) {
   }
 }
 Set-Content "$($tempPath)\Bits\meta-data" ([byte[]][char[]] "$metadata") @cSplat
-# If (($NetAutoconfig -eq $false) -and($NetConfigType -in 'v1','v2')) {
-#   Set-Content "$($tempPath)\Bits\network-config" ([byte[]][char[]] "$networkconfig") @cSplat
-# }
+If (($NetAutoconfig -eq $false) -and($NetConfigType -in 'v1','v2')) {
+  Set-Content "$($tempPath)\Bits\network-config" ([byte[]][char[]] "$networkconfig") @cSplat
+}
 Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") @cSplat
 If ($ImageTypeAzure) {
   $ovfenvxml.Save("$($tempPath)\Bits\ovf-env.xml");

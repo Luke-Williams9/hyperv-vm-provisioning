@@ -158,7 +158,6 @@ Function Make-Random {
     Return $result
 }
 
-
 Function Set-VMAdvancedSettings {
         <#
         .SYNOPSIS
@@ -446,3 +445,43 @@ Function Set-VMAdvancedSettings {
 }
 
 # $freeRAMbytes = ((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum
+
+
+Function YAML-fileWrite{
+    [cmdletBinding()]
+    param (
+        $content,    
+        [int]$indent = 2,
+        [string]$path
+    )
+    If ($content.GetType().name -eq 'Object[]') {
+        # content is an array. pass it thru
+        $r_content = $content
+    } else {
+        If (Test-Path $content) {
+            # Content is a file. load it
+            $r_content = Get-Content $content
+        } Else {
+            Throw "Unable to load content from $content"
+        }
+    }
+    
+    $indent_str = ' ' * $indent
+    $result_yaml = @()
+    $result_yaml += ($indent_str + '- content: |')
+    # Loop through each line, skip blank lines
+
+    Foreach ($l in $r_content) {
+        # Skip blank lines and comments
+        # try trimming $l so we can detect a leading #
+        Try {$ll = $l.trim()}
+        Catch {$ll = $l}
+        if (($l -match '^\s*$') -or ($ll -match '^#')) {
+            continue
+        }
+        $line = $indent_str + '    ' + $l
+        $result_yaml += $line
+    }
+    $result_yaml += ($indent_str + '  path: ' + $path)
+    Return $result_yaml
+}
