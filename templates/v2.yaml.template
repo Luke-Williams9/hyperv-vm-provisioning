@@ -1,0 +1,17 @@
+ # values surrounded by !!@ @!! must be replaced with powerhell variables of the same name
+  - content: |
+      network:
+        version: 2
+        renderer: networkd
+        ethernets:
+          !!@NetInterface@!!:
+            dhcp4: no
+            addresses:
+              - !!@NetAddress@!!/24
+            nameservers:
+              search: !!@searchDomain@!!
+              addresses: !!@NameServers@!!
+            routes:
+              - to: default
+                via: !!@NetGateway@!!
+    path: /etc/netplan/99-static.yaml  

@@ -3,16 +3,17 @@
   Provision Cloud images on Hyper-V
   All defaults are set. Running the script without any parameters will create a Debian Bookworm VM
 .EXAMPLE
-  .\New-LinuxVM.ps1 -name 'teste20' -IP "10.2.2.180" -verbose
   PS C:\> .\New-LinuxVM.ps1
   PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 60GB -VMName "azure-1" -ImageVersion "20.04" -VirtualSwitchName "SW01" -VMGeneration 2
   PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 8GB -VMName "debian11" -ImageVersion 11 -virtualSwitchName "External Switch" -VMGeneration 2 -GuestAdminUsername admin -GuestAdminPassword admin -VMMachine_StoragePath "D:\Hyper-V\" -NetAddress 192.168.188.12 -NetNetmask 255.255.255.0 -NetGateway 192.168.188.1 -NameServers "192.168.188.1"
   It should download cloud image and create VM, please be patient for first boot - it could take 10 minutes
   and requires network connection on VM
 .NOTES
-  Was having problems with static network configuration, particularly with debian bookworm. I'm starting by going back to the basics, essentially commenting out anything I don't understand :D
   Original script: https://blogs.msdn.microsoft.com/virtual_pc_guy/2015/06/23/building-a-daily-ubuntu-image-for-hyper-v/
+
   This projected Forked from: https://github.com/schtritoff/hyperv-vm-provisioning
+
+
   References:
   - https://git.launchpad.net/cloud-init/tree/cloudinit/sources/DataSourceAzure.py
   - https://github.com/Azure/azure-linux-extensions/blob/master/script/ovf-env.xml
@@ -22,6 +23,7 @@
   - https://gist.github.com/Informatic/0b6b24374b54d09c77b9d25595cdbd47
   - https://www.neowin.net/news/canonical--microsoft-make-azure-tailored-linux-kernel/
   - https://www.altaro.com/hyper-v/powershell-script-change-advanced-settings-hyper-v-virtual-machines/
+
   Recommended: choco install putty -y
 #>
 
@@ -56,14 +58,12 @@ param (
   [string] $Locale = ((Get-Culture).Name.replace('-','_')) + '.UTF-8', # "en_US.UTF-8",
   [string] $NetMacAddress,
   [string] $NetInterface  = "eth0",
-  [Parameter()][Alias("IP")]
   [string] $NetAddress,
   [string] $NetNetmask,
   [string] $NetNetwork,
   [string] $NetGateway,
   [array]  $NameServers,
-  [string] $NetConfigType = "v2", # ENI, v1, v2, ENI-file, dhclient
-  [switch] $NoStart, # Set to True to prevent starting the VM at the end of the script
+  [string] $NetConfigType = "ENI-file", # ENI, v1, v2, ENI-file, dhclient
   [array]  $packages = '',#@('python3','pip','docker','docker-compose'),
   [switch] $ShowSerialConsoleWindow = $false,
   [switch] $ShowVmConnectWindow = $false,
@@ -143,7 +143,6 @@ If ($VMMemoryStartupBytes -gt $freeRAMbytes) {
 }
 
 # Time Zone
-# If not specified, then we generate abasic 'etc/GMT' timezone from hosts time zone
 if ($TimeZone -in $null, '') {
   $baseTZ = (Get-Timezone).BaseUTCoffset.hours
   if ($baseTZ -ge 0) {
@@ -185,46 +184,45 @@ If ($NameServers -in $null, '') {
 If ($VMHostname -in $null, '') {
   $VMHostname = (((Get-CimInstance -ClassName Win32_ComputerSystem).Name).Substring(0,4) -replace '[-_]','') + (Make-Random 6)
 }
- $searchDomain = $hostNetInfo.DomainSuffix.ToLower()
- $FQDN = $VMHostname.ToLower() + "." + $searchDomain
+
+ $FQDN = $VMHostname.ToLower() + "." + $hostNetInfo.DomainSuffix.ToLower()
 
  if ($GuestAdminPassword -in $null, '') {
-    $GuestAdminPassword = 'Passw0rd'
-    #$GuestAdminPassword = Make-Random 8
+    #$GuestAdminPassword = 'Passw0rd'
+    $GuestAdminPassword = Make-Random 8
     Write-Host "-------------- LOCAL ADMIN -----------------------"
     Write-Host "Username: $GuestAdminUsername"
     Write-Host "Password: $GuestAdminPassword"
     Write-Host ""
-
+      
  }
 
-<#
-.\New-LinuxVM.ps1 -name 'teste1' -IP '10.2.2.161' -verbose
-#>
-$NetAutoconfig = ($NetAddress    -in $null,'') -and
-                 ($NetNetmask    -in $null,'') -and
-                 ($NetNetwork    -in $null,'') -and
-                 ($NetGateway    -in $null,'') -and
+$NetAutoconfig = ($NetAddress         -in $null,'') -and
+                 ($NetNetmask         -in $null,'') -and
+                 ($NetNetwork         -in $null,'') -and
+                 ($NetNetGateway      -in $null,'') -and
+                 ($NetNetmask         -in $null,'') -and
                  ($NetMacAddress -in $null,'')
 
-Write-Verbose "-------------- NETWORK CONFIGURATION ------------------"
-Write-Verbose ""
-
 if ($NetAutoconfig -eq $false) {
-  If ( -Not $NetAddress) {
-    Write-Error "No static IP address specified. Use -NetAddress to specify an IP address."
-    Exit 1
-  }
-  If ( -not $NetNetmask) {
-    Write-Verbose "No subnet mask specified, assuming /24"
-    $NetNetmask = '255.255.255.0'
-  }
+  Write-Verbose "-------------- NETWORK CONFIGURATION ------------------"
 
-  If ( -not $NetNetGateway) {
-    Write-Verbose "No gateway IP specified, assuming .1"
-    $NetGateway = $NetAddress -replace '\.\d+$','.1'
+  if ($NetAutoconfig -eq $false) {
+    If ( -Not $NetAddress) {
+      Write-Error "No static IP address specified. Use -NetAddress to specify an IP address."
+      Exit 1
+    }
+    If ( -not $NetNetmask) {
+      Write-Verbose "No subnet mask specified, assuming /24"
+      $NetNetmask = '255.255.255.0'
+    }
+  
+    If ( -not $NetNetGateway) {
+      Write-Verbose "No gateway IP specified, assuming .1"
+      $NetGateway = $NetAddress -replace '\.\d+$','.1'
+    }
   }
-
+  Write-Verbose ""
   Write-Verbose "VMStaticMacAddress: '$NetMacAddress'"
   Write-Verbose "NetInterface:     '$NetInterface'"
   Write-Verbose "NetAddress:       '$NetAddress'"
@@ -232,8 +230,6 @@ if ($NetAutoconfig -eq $false) {
   Write-Verbose "NetNetwork:       '$NetNetwork'"
   Write-Verbose "NetGateway:       '$NetGateway'"
   Write-Verbose ""
-} else {
-  Write-Verbose "DHCP"
 }
 
 # check if verbose is present, src: https://stackoverflow.com/a/25491281/1155121
@@ -247,8 +243,6 @@ $rSplat = @{
   Maximum = 9999999999999999
 }
 $VmMachineId = "{0:####-####-####-####}-{1:####-####-##}" -f (Get-Random @rSplat),(Get-Random @rSplat)
-
-# Temp path
 $tp = Join-Path $tempRoot "temp"
 $tempPath = Join-Path $tp $vmMachineId
 Remove-Item -path $tp -recurse -force -confirm:$false -ErrorAction SilentlyContinue
@@ -383,35 +377,31 @@ $net_settings = @{
   NetAutoconfig = $NetAutoconfig
   VMStaticMacAddress = $NetMacAddress
   NetAddress = $NetAddress
-  NetNetmask = $NetNetmask
-  NetNetwork = $NetNetwork
   NetGateway = $NetGateway
   NameServers = ''
   DomainName = $VMhostName
-  searchDomain = ''
   FQDN = $FQDN
 }
 If ( -not $NetAutoconfig ) {
   Write-Verbose "Network autoconfig disabled; preparing networkconfig."
-  # If ($ImageOS -eq "debian") {
-  #   Write-Verbose "OS 'Debian' found; manual network configuration 'ENI-file' activated."
-  #   $NetConfigType = "ENI-file"
-  # }
-  Write-Verbose "NetworkConfigType: '$NetConfigType' assigned."
-
+  If ($ImageOS -eq "debian") {
+    Write-Verbose "OS 'Debian' found; manual network configuration 'ENI-file' activated."
+    $NetConfigType = "ENI-file"
+  } else {
+    Write-Verbose "NetworkConfigType: '$NetConfigType' assigned."
+  }
   Switch ($NetConfigType) {
+    {$_ -in 'v1', 'v2'} {
+      $net_settings.NameServers = "'" + ($NameServers -join "', '") + "'"
+    }
     {$_ -in 'ENI','ENI-file','dhclient'} {
       $net_settings.NameServers = $NameServers -join ' '
     }
     "v1" { 
-      $net_settings.NameServers = "'" + ($NameServers -join "', '") + "'"
       $tPath = Join-Path $PSScriptRoot "templates\v1-static.template" 
     }
     "v2" {
-      #$net_settings.NameServers = ("  - " + (($NameServers | Where-Object {$_ -notin '',$null}) -join "`n  - "))
-      $net_settings.NameServers = ('[' + (($NameServers | Where-Object {$_ -notin '',$null}) -join ", ") + ']')
-      $net_settings.SearchDomain = ('[' + (($searchDomain | Where-Object {$_ -notin '',$null}) -join ", ") + ']')
-      $tPath = Join-Path $PSScriptRoot "templates\v2.yaml.template"
+      $tPath = Join-Path $PSScriptRoot "templates\v2.template"
     }
     "ENI" { 
       $tPath = Join-Path $PSScriptRoot "templates\ENI.template"
@@ -422,10 +412,10 @@ If ( -not $NetAutoconfig ) {
     "dhclient" {
       $tPath = Join-Path $PSScriptRoot "templates\dhclient.template"
     }
-    {$_ -in "v1", "ENI"} {
+    {$_ -in "v1", "v2", "ENI"} {
       $networkconfig = Render-Template -TemplateFilePath $tPath -Variables $net_settings
     }
-    {$_ -in "ENI-file","v2","dhclient"} {
+    {$_ -in "ENI-file", "dhclient"} {
       $network_write_files = Render-Template -TemplateFilePath $tPath -Variables $net_settings
     }
     default {
@@ -443,7 +433,7 @@ If ( -not $NetAutoconfig ) {
   }
   Write-Verbose ""
 
-
+  
 }
 
 <# -------------------------------------------------------- Create Userdata ----------------------------------------------------------------#>
@@ -455,7 +445,7 @@ $user_settings = @{
   FQDN                = $FQDN
   TimeZone            = $TimeZone
   Locale              = $Locale
-  packages            = ("  - " + ((($packages + $imagePackages) | Where-Object {$_ -notin '',$null}) -join "`n  - "))
+  packages            = ("  - " + (($packages + $imagePackages) -join "`n  - "))
   GuestAdminUsername  = $GuestAdminUsername
   GuestAdminPassword  =  $GuestAdminPassword
   SSHkeys             = ''
@@ -477,20 +467,19 @@ If ($GuestAdminSshPubKey -notin '', $null) {
   $user_settings.SSHkeys = "    ssh_authorized_keys:`n  - $GuestAdminSshPubKey"
 }
 
-# If ( -not $NetAutoconfig) {
-#   $user_settings.bootcmd = "bootcmd:`n  - [ cloud-init-per, once, fix-dhcp, sh, -c, sed -e 's/#timeout 60;/timeout 1;/g' -i /etc/dhcp/dhclient.conf ]"
-# }
+If ( -not $NetAutoconfig) {
+  $user_settings.bootcmd = "bootcmd:`n  - [ cloud-init-per, once, fix-dhcp, sh, -c, sed -e 's/#timeout 60;/timeout 1;/g' -i /etc/dhcp/dhclient.conf ]"
+}
 
-# If ( (-not $NetAutoconfig) -and ($NetConfigType -ieq "ENI-file")) {
-#   $user_settings.netAutoConfigENIfile = "  # maybe condition OS based for Debian only and not ENI-file based?`n  # Comment out cloud-init based dhcp configuration for $NetInterface`n  - [ rm, /etc/network/interfaces.d/50-cloud-init ]"
-# }
+If ( (-not $NetAutoconfig) -and ($NetConfigType -ieq "ENI-file")) {
+  $user_settings.netAutoConfigENIfile = "  # maybe condition OS based for Debian only and not ENI-file based?`n  # Comment out cloud-init based dhcp configuration for $NetInterface`n  - [ rm, /etc/network/interfaces.d/50-cloud-init ]"
+}
 
-# If ($ImageTypeAzure) {
-#   $user_settings.azureWAagentDisable = "`n# dont start waagent service since it useful only for azure/scvmm`n- [ systemctl, stop, walinuxagent.service]`n- [ systemctl, disable, walinuxagent.service]"
-# }
+If ($ImageTypeAzure) {
+  $user_settings.azureWAagentDisable = "`n# dont start waagent service since it useful only for azure/scvmm`n- [ systemctl, stop, walinuxagent.service]`n- [ systemctl, disable, walinuxagent.service]"
+}
 
-$userdata = Render-Template -TemplateFilePath (Join-Path $PSScriptRoot "templates\userdata-static.yaml.template") -Variables $user_settings
-# $userdata = Render-Template -TemplateFilePath (Join-Path $PSScriptRoot "templates\userdata.yaml.template") -Variables $user_settings
+$userdata = Render-Template -TemplateFilePath (Join-Path $PSScriptRoot "templates\userdata.template") -Variables $user_settings
 
 Write-Verbose "Userdata:"
 Write-Verbose $userdata
@@ -518,7 +507,7 @@ If ($ImageTypeAzure) {
     userdata_encoded    = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($userdata))
     dscfg_encoded       = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($dscfg))
   }
-
+  
   $ovfenvxml = [xml](Render-Template -TemplateFilePath (Join-Path $PSScriptRoot "templates\ovfenxml.template") -Variables $ovfen_data)
 }
 
@@ -538,9 +527,9 @@ If ($PSVersionTable.PSVersion.Major -ge 6) {
   }
 }
 Set-Content "$($tempPath)\Bits\meta-data" ([byte[]][char[]] "$metadata") @cSplat
-# If (($NetAutoconfig -eq $false) -and($NetConfigType -in 'v1','v2')) {
-#   Set-Content "$($tempPath)\Bits\network-config" ([byte[]][char[]] "$networkconfig") @cSplat
-# }
+If (($NetAutoconfig -eq $false) -and($NetConfigType -in 'v1','v2')) {
+  Set-Content "$($tempPath)\Bits\network-config" ([byte[]][char[]] "$networkconfig") @cSplat
+}
 Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") @cSplat
 If ($ImageTypeAzure) {
   $ovfenvxml.Save("$($tempPath)\Bits\ovf-env.xml");
@@ -549,7 +538,7 @@ If ($ImageTypeAzure) {
 # Create meta data ISO image, src: https://cloudinit.readthedocs.io/en/latest/topics/datasources/nocloud.html
 # both azure and nocloud support same cdrom filesystem 
 # https://github.com/canonical/cloud-init/blob/606a0a7c278d8c93170f0b5fb1ce149be3349435/cloudinit/sources/DataSourceAzure.py#L1972
-
+ 
 $metaDataIso = "$($VHDpath)\$($VMName)-metadata.iso"
 Write-Host "Creating metadata iso for VM provisioning"
 Write-Verbose "Filename: $metaDataIso"
@@ -596,7 +585,7 @@ Switch -Wildcard ($ImageHashFilename) {
   '*SHA512*' { $hashAlgo = "SHA512" }
   Default    { Throw "$ImageHashFilename hashing algorithm not supported." }
 }
-
+Write-Host $hashAlgo
 
 <# -------------------------------------------------------- Download and verify image ----------------------------------------------------------------#>
 
@@ -646,7 +635,7 @@ Switch ($ImageFileExtension) {
       NoNewWindow = $true
       RedirectStandardOutput = "$($tempPath)\bsdtar.log"
     }
-
+  
     Start-Process @tarSplat
   }
   'zip' { 
@@ -727,7 +716,7 @@ If ($ConvertImageToNoCloud) {
     ArgumentList = "/c `"`"$(Join-Path $PSScriptRoot "wsl-convert-vhd-nocloud.cmd")`" `"$($ImageVHDfinal)`"`""
   }
   $process = Start-Process @noCloudSplat
-
+  
   # https://stackoverflow.com/a/16018287/1155121
   If ($process.ExitCode -ne 0) {
     Throw "Failed to modify/convert VHD to NoCloud DataSource!"
@@ -784,7 +773,6 @@ If ($VMDynamicMemoryEnabled) {
 }
 
 # Data volume
-# ------------------ Need to error handle New-VHD for when a VHD of the same name exists
 If ($VMDataVol) {
   $vSplat = @{
     Path = "$VHDpath\$VMName-data.vhdx"
@@ -793,7 +781,7 @@ If ($VMDataVol) {
   }
   New-VHD @vSplat
   Add-VMHardDiskDrive -VMName $VMName -Path $vSplat.Path
-
+  
 }
 # make sure VM has DVD drive needed for provisioning
 If ( -not (Get-VMDvdDrive -VMName $VMName)) {
@@ -915,15 +903,18 @@ Write-Host -ForegroundColor Green " Done."
 # https://social.technet.microsoft.com/Forums/en-US/d285d517-6430-49ba-b953-70ae8f3dce98/guest-asset-tag?forum=winserverhyperv
 Write-Host "Set SMBIOS serial number ..."
 $vmserial_smbios = $VmMachineId
+
 If ($ImageTypeAzure) {
   # set chassis asset tag to Azure constant as documented in https://github.com/canonical/cloud-init/blob/5e6ecc615318b48e2b14c2fd1f78571522848b4e/cloudinit/sources/helpers/azure.py#L1082
   Write-Host "Set Azure chasis asset tag ..." 
   # https://social.technet.microsoft.com/Forums/en-US/d285d517-6430-49ba-b953-70ae8f3dce98/guest-asset-tag?forum=winserverhyperv
   Set-VMAdvancedSettings -VM $vm -ChassisAssetTag '7783-7084-3265-9085-8269-3286-77' -Force -Verbose:$verbose
   Write-Host -ForegroundColor Green " Done."
+
   # also try to enable NoCloud via SMBIOS  https://cloudinit.readthedocs.io/en/22.4.2/topics/datasources/nocloud.html
   $vmserial_smbios = 'ds=nocloud'
 }
+
 Write-Host "SMBIOS SN: $vmserial_smbios"
 Set-VMAdvancedSettings -VM $vm.name -BIOSSerialNumber $vmserial_smbios -ChassisSerialNumber $vmserial_smbios -Force -Verbose
 Write-Host -ForegroundColor Green " Done."
@@ -948,13 +939,9 @@ If ($PSBoundParameters.Debug -eq $true) {
   Write-Host -ForegroundColor Green " Done."
 }
 
-If ($noStart) {
-  Write-Host "VM ready for you to start"
-} else {
-  Write-Host "Starting VM..." 
-  Start-VM $VMName
-  Write-Host -ForegroundColor Green " Done."
-}
+Write-Host "Starting VM..." 
+Start-VM $VMName
+Write-Host -ForegroundColor Green " Done."
 
 # TODO check If VM has got an IP ADDR, If address is missing then write error because provisioning won't work without IP, src: https://stackoverflow.com/a/27999072/1155121
 
@@ -979,5 +966,6 @@ If ($ShowVmConnectWindow) {
 }
 
 Write-Host "Done"
+
 
 
