@@ -48,19 +48,19 @@ function Render-Template {
         foreach ($m in $match) {
             $var = $m.Groups[1].Value
             If ($Variables.ContainsKey($var) -and $Variables[$var] -notin $null,'') {
-                $line = $line -replace "!!@$var@!!", $Variables[$var]
+                $line = $line -replace "$pre$var$post", $Variables[$var]
             } Else {
                 # If variable not found or is null, comment out the line with preserved indentation
                 $leadingWhitespace = $line -replace '^(\s*).*$','$1'
                 $line = $leadingWhitespace + $comment + ($line.trim() -replace $regex, '')
                 break  # No need to check further If one variable in the line is null or not found
             }
-        }
+        } 
 
         $templateContent[$i] = $line
     }
-
-    return $templateContent -join "`n"
+    #return $templateContent -join "`n"
+    return ($templateContent -join "`n" -replace $regex, '')
 }
 
 Function Fetch-Checksums {

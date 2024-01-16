@@ -11,7 +11,9 @@
       "ufw",
       "dnsutils",
       "net-tools",
-      "curl"
+      "curl",
+      "ca-certificates",
+      "gnupg"
     ],
     "ImageDefaultVersion": "12",
     "imageVersionTable": {

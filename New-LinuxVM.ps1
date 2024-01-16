@@ -32,21 +32,19 @@
 [cmdletBinding()]
 param (
   [array]  $additionalRuncmd,
-  [bool]   $BaseImageCheckForUpdate = $true, # check for newer image at Distro cloud-images site
-  [bool]   $BaseImageCleanup = $true, # delete old vhd image. Set to false if using (TODO) differencing VHD
   [bool]   $ConvertImageToNoCloud = $false, # could be used for other image types that do not support NoCloud, not just Azure
   [string] $CloudInitPowerState = "reboot", # poweroff, halt, or reboot , https://cloudinit.readthedocs.io/en/latest/reference/modules.html#power-state-change
-  [string] $CustomUserDataYamlFile,
-  [string] $DownloadURL, 
+  #[string] $UserDataFile = (Join-Path $PSScriptRoot "templates\userdata-debdocker.yaml.template"),
+  [string] $UserDataFile = (Join-Path $PSScriptRoot "templates\userdata.ubuntu-docker.template"),
+  [string] $DownloadURL,  
   [switch] $Force = $false,
   [Parameter()][Alias("user","username","u")]
   [string] $GuestAdminUsername = "admin",
   [Parameter()][Alias("password","pass","p")]
   [string] $GuestAdminPassword,
   [string] $GuestAdminSshPubKey,
-# [string] $imageOS = 'debian',
   [Parameter()][Alias("distro","distroName")]  
-  [string] $imageOS = 'debian',
+  [string] $imageOS = 'ubuntu', # ubuntu, debian
   [Parameter()][Alias("version",'distroVersion','ver')]
   [string] $ImageVersion,
   [bool]   $ImageTypeAzure = $false,
@@ -133,6 +131,10 @@ $qemuImgPath = Join-Path $PSScriptRoot "tools\qemu-img\qemu-img.exe"
 # Windows version of tar for extracting tar.gz files, src: https://github.com/libarchive/libarchive
 $bsdtarPath = Join-Path $PSScriptRoot "tools\bsdtar.exe"
 
+
+<# -------------------------------------------------------- Hardware validation ----------------------------------------------------------------#>
+
+
 # RAM check - leave 1GB free on the host
 $freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum)
 If ($VMMemoryStartupBytes -gt $freeRAMbytes) {
@@ -140,6 +142,13 @@ If ($VMMemoryStartupBytes -gt $freeRAMbytes) {
   Do {
     $VMMemoryStartupBytes -= 128MB
   } While ($VMMemoryStartupBytes -gt $freeRAMbytes)
+}
+
+# Also do a CPU check
+$CPUs = Get-CimInstance Win32_ComputerSystem
+If ($CPUs.NumberOfLogicalProcessors -lt $VMProcessorCount) {
+  Write-Warning "Requested CPU count is higher than available logical processors (${CPUs.NumberOfLogicalProcessors}). Reducing count."
+  $VMprocessorCount = $CPUs.NumberOfLogicalProcessors
 }
 
 # Time Zone
@@ -154,12 +163,8 @@ if ($TimeZone -in $null, '') {
   $TimeZone = 'Etc/GMT' + $tzPre + [string]([math]::abs($baseTZ))
 }
 
-# Also do a CPU check
-$CPUs = Get-CimInstance Win32_ComputerSystem
-If ($CPUs.NumberOfLogicalProcessors -lt $VMProcessorCount) {
-  Write-Warning "Requested CPU count is higher than available logical processors (${CPUs.NumberOfLogicalProcessors}). Reducing count."
-  $VMprocessorCount = $CPUs.NumberOfLogicalProcessors
-}
+<# -------------------------------------------------------- Generate missing VM parameters ----------------------------------------------------------------#>
+
 
 # Generate VM / Hostname if blank
 If ($VMName -in $null, '') {
@@ -323,7 +328,6 @@ If ($downloadURL -in $null, '') {
   if ($a.NetConfigType -notIn '',$null) {
     $NetConfigType = $a.NetConfigType
   }
-  Write-Host "Download URL: $downloadURL"
   If ($ImageVersion) {
     If ($ImageVersion -match "^\w+$") {
       $imgv = ($a.imageVersionTable.PSObject.properties | Where-Object {$_.Value -eq $ImageVersion}).name
@@ -362,7 +366,7 @@ Catch { Throw "Error getting VMHost info $_" }
 # Set folders if not defined
 if ($VMpath -in $null,'')  { $VMpath = $hvInfo.VirtualMachinePath }
 if ($VHDpath -in $null,'') { $VHDpath = $hvInfo.VirtualHardDiskPath }
-Foreach ($d in $VMpath, $VHDpath) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+Foreach ($d in $VMpath, $VHDpath) { New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null }
 
 <# -------------------------------------------------------- Cleanup old VM ----------------------------------------------------------------#>
 
@@ -464,6 +468,8 @@ If ( -not $NetAutoconfig ) {
 
 }
 
+#$docker_write_files = YAML-fileWrite -content "docker-compose\elastiflow.yml" -path '/opt/elastiflow/docker-compose.yml'
+#$additionalRuncmd = "'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'"
 <# -------------------------------------------------------- Create Userdata ----------------------------------------------------------------#>
 
 # userdata for cloud-init, https://cloudinit.readthedocs.io/en/latest/topics/examples.html
@@ -480,12 +486,17 @@ $user_settings = @{
   bootcmd             = ''
   azureWAagentDisable = $azureWAagentDisable
   network_write_files = $network_write_files
+  docker_write_files  = $docker_write_files
   NameServers         = "'" + ($NameServers -join "', '") + "'"
   DomainName          = $hostNetInfo.DomainSuffix.ToLower()
   CloudInitPowerState = $CloudInitPowerState
   KeyboardLayout      = $KeyboardLayout
-  AdditionalRuncmd    = ("  - " + ($additionalRuncmd -join "`n  - "))
+  AdditionalRuncmd    = ''
   Mounts              = ''
+}
+
+if ($additionalRuncmd -notin '',$null) {
+  $user_settings.AdditionalRuncmd = ("  - " + ($additionalRuncmd -join "`n  - "))
 }
 
 If ($VMdataVol) {
@@ -507,7 +518,7 @@ If ($GuestAdminSshPubKey -notin '', $null) {
 #   $user_settings.azureWAagentDisable = "`n# dont start waagent service since it useful only for azure/scvmm`n- [ systemctl, stop, walinuxagent.service]`n- [ systemctl, disable, walinuxagent.service]"
 # }
 
-$userdata = Render-Template -TemplateFilePath (Join-Path $PSScriptRoot "templates\userdata-static.yaml.template") -Variables $user_settings
+$userdata = Render-Template -TemplateFilePath $userDataFile -Variables $user_settings
 # $userdata = Render-Template -TemplateFilePath (Join-Path $PSScriptRoot "templates\userdata.yaml.template") -Variables $user_settings
 
 Write-Verbose "Userdata:"
@@ -516,12 +527,7 @@ Write-Verbose ""
 If ($testUserdata) {
   Exit 0
 }
-# override default userdata with custom yaml file: $CustomUserDataYamlFile
-# the will be parsed for any powershell variables, src: https://deadroot.info/scripts/2018/09/04/PowerShell-Templating
-If (-not [string]::IsNullOrEmpty($CustomUserDataYamlFile) -and (Test-Path $CustomUserDataYamlFile)) {
-  Write-Verbose "Using custom userdata yaml $CustomUserDataYamlFile"
-  $userdata = $ExecutionContext.InvokeCommand.ExpandString( $(Get-Content $CustomUserDataYamlFile -Raw) ) # parse variables
-}
+
 
 If ($ImageTypeAzure) {
   # cloud-init configuration that will be merged, see https://cloudinit.readthedocs.io/en/latest/topics/datasources/azure.html

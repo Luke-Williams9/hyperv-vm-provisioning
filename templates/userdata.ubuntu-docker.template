@@ -15,10 +15,6 @@ growpart:
   devices: [/]
   ignore_growroot_disabled: false
 
-#apt:
-#  http_proxy: http://host:port
-#  https_proxy: http://host:port
-
 preserve_sources_list: true
 package_update: true
 package_upgrade: true
@@ -28,14 +24,9 @@ packages:
   - eject
   - console-setup
   - keyboard-configuration
+  - docker.io
+  - docker-compose
 !!@packages@!!
-
-# # documented keyboard option, but not implemented ?
-# # https://cloudinit.readthedocs.io/en/latest/topics/modules.html#keyboard
-# # https://github.com/sulmone/X11/blob/59029dc09211926a5c95ff1dd2b828574fefcde6/share/X11/xkb/rules/xorg.lst#L181
-# # Do we need keyboard at all here?
-# keyboard:
-#   layout: !!@KeyboardLayout@!!
 
 # https://learn.microsoft.com/en-us/azure/virtual-machines/linux/cloudinit-add-user#add-a-user-to-a-vm-with-cloud-init
 
@@ -54,7 +45,6 @@ users:
     # ssh_authorized_keys:
     # - <GuestAdminSshPubKey>
 
-
 disable_root: true    # true: notify default user account / false: allow root ssh login
 ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
 
@@ -67,13 +57,13 @@ ssh_pwauth: true      # true: allow login with password; else only with setup pu
 
 !!@bootcmd@!!
 runcmd:
-  # !!@netAutoConfigENIfile@!!
   # remove metadata iso
   - [ sh, -c, "if test -b /dev/cdrom; then eject; fi" ]
   - [ sh, -c, "if test -b /dev/sr0; then eject /dev/sr0; fi" ]
   # !!@azureWAagentDisable@!!
   # disable cloud init on next boot (https://cloudinit.readthedocs.io/en/latest/topics/boot.html, https://askubuntu.com/a/1047618)
   - [ sh, -c, touch /etc/cloud/cloud-init.disabled ]
+  - 'echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf sudo sysctl -p'
   # set locale
   # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
   # /etc/defaults/locale set and results into error
@@ -81,9 +71,7 @@ runcmd:
   - [ update-locale, "!!@Locale@!!" ]
   - [ rm, -f, /etc/netplan/*.yaml ]
   - [ netplan, apply ]
-  # # documented keyboard option, but not implemented ?
-  # # change keyboard layout, src: https://askubuntu.com/a/784816
-  # - [ sh, -c, sed -i 's/XKBLAYOUT=\"\w*"/XKBLAYOUT=\"'!!@KeyboardLayout@!!'\"/g' /etc/default/keyboard ]
+  - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
 !!@AdditionalRuncmd@!!
 
 write_files:
@@ -139,7 +127,90 @@ write_files:
         "userland-proxy": false
       }
     path: /etc/docker/daemon.json
+  - content: |
+      # https://medium.com/@ebisong18/from-zero-to-flow-setting-up-elastiflow-in-minutes-05e3a40e79c3
+      # It works when you load the ECS objects
+      # https://raw.githubusercontent.com/elastiflow/elastiflow_for_elasticsearch/master/kibana/flow/kibana-8.2.x-flow-ecs.ndjson
+      version: '3'
+      volumes:
+        es_data:
+          driver: local
+      services:
+        es_master1:
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.10.4
+          restart: unless-stopped
+          hostname: es_master1
+          ulimits:
+            memlock:
+              soft: -1
+              hard: -1
+            nofile:
+              soft: 131072
+              hard: 131072
+            nproc: 8192
+            fsize: -1
+          network_mode: host
+          volumes:
+            - es_data:/usr/share/elasticsearch/data
+          environment:
+            ES_JAVA_OPTS: '-Xms2g -Xmx2g'
+            cluster.name: elastiflow
+            node.name: es_master1
+            bootstrap.memory_lock: 'true'
+            network.bind_host: 0.0.0.0
+            http.port: 9200
+            http.publish_port: 9200
+            transport.port: 9300
+            transport.publish_port: 9300
+            cluster.initial_master_nodes: 'es_master1'
+            indices.query.bool.max_clause_count: 8192
+            search.max_buckets: 250000
+            action.destructive_requires_name: 'true'
+            xpack.security.enabled: 'false'
+        kibana:
+          image: docker.elastic.co/kibana/kibana:8.10.4
+          restart: unless-stopped
+          hostname: NODE_NAME
+          network_mode: host
+          environment:
+            TELEMETRY_OPTIN: 'false'
+            TELEMETRY_ENABLED: 'false'
+            SERVER_NAME: 'NODE_NAME'
+            SERVER_HOST: '0.0.0.0'
+            SERVER_PORT: 5601
+            SERVER_MAXPAYLOADBYTES: 8388608
+            ELASTICSEARCH_HOSTS: 'http://localhost:9200'
+            ELASTICSEARCH_REQUESTTIMEOUT: 132000
+            ELASTICSEARCH_SHARDTIMEOUT: 120000
+            ELASTICSEARCH_SSL_VERIFICATIONMODE: 'none'
+            KIBANA_AUTOCOMPLETETIMEOUT: 3000
+            KIBANA_AUTOCOMPLETETERMINATEAFTER: 2500000
+            VIS_TYPE_VEGA_ENABLEEXTERNALURLS: 'true'
+            XPACK_MAPS_SHOWMAPVISUALIZATIONTYPES: 'true'
+            XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: 'ElastiFlow_0123456789_0123456789_0123456789'
+        flow-collector:
+          image: elastiflow/flow-collector:6.4.2
+          container_name: flow-collector
+          restart: 'unless-stopped'
+          network_mode: 'host'
+          volumes:
+            - ./elastiflow:/etc/elastiflow
+          environment:
+            EF_LICENSE_ACCEPTED: 'true'
+            EF_FLOW_SERVER_UDP_IP: '0.0.0.0'
+            EF_FLOW_SERVER_UDP_PORT: 9995
+            #EF_LOGGER_LEVEL: 'debug'
+            EF_OUTPUT_ELASTICSEARCH_ENABLE: 'true'
+            EF_OUTPUT_ELASTICSEARCH_ECS_ENABLE: 'true'
+            EF_OUTPUT_ELASTICSEARCH_ADDRESSES: '127.0.0.1:9200'
+            EF_OUTPUT_ELASTICSEARCH_TIMESTAMP_SOURCE: 'start'
+            EF_OUTPUT_ELASTICSEARCH_INDEX_PERIOD: 'rollover'
+            EF_OUTPUT_ELASTICSEARCH_INDEX_PREFIX: 'elastiflow'
+    path: /opt/elastiflow/docker-compose.yml
+
+
 !!@network_write_files@!!
+
 
 mount_default_fields: [ None, None, "auto", "defaults,nofail", "0", "2" ]
 !!@mounts@!!
