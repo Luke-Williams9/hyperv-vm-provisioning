@@ -66,13 +66,26 @@ function Render-Template {
 Function Fetch-Checksums {
     [CmdletBinding()]
     param (
-        [parameter(position=0)][string]$url = "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS",
+        [parameter(position=0)][string]$url,
         [parameter(position=1)][string]$pattern = '^(?<Checksum>[a-fA-F0-9]+)\s+(?<FileName>.+)$'
     )
-    Try {
-        $response = Invoke-WebRequest -Uri $url -UseBasicParsing
+    If ( -not $url) {
+        Throw "No URL specified"
     }
-    Catch {
+    $count = 0
+    Do {
+        Try {
+            $response = Invoke-WebRequest -Uri $url -UseBasicParsing
+            $success = $?
+        }
+        Catch {
+            Write-Warning "Failed to download checksums: $_"
+            Write-Warning "Retrying in 5 seconds..."
+            Start-Sleep -Seconds 5
+        }
+        $count++
+    } While ( -not $success -and $count -lt 5 )
+    If (-not $success) {
         Throw $_
     }
     $matches = $response.RawContent -split '\r?\n' | ForEach-Object {
@@ -484,4 +497,27 @@ Function YAML-fileWrite{
     }
     $result_yaml += ($indent_str + '  path: ' + $path)
     Return $result_yaml
+}
+
+Function Create-htpasswd {
+    [cmdletBinding()]
+    param (
+        [parameter(Position=0)][string]$username,
+        [parameter(Position=1)][string]$password
+    )
+    # Take a plaintext username + password and generate the contents of an .htpasswd file for use with nginx
+    # uses bcrypt
+    # https://poshsecurity.com/blog/2013/4/12/password-hashing-with-bcrypt-and-powershell-part-2.html
+    # https://httpd.apache.org/docs/2.4/misc/password_encryptions.html
+    # https://github.com/BcryptNet/bcrypt.net/releases
+
+    if ( (-not $username) -or (-not $password) ) {
+        Throw "username and password must be specified"
+    }
+    Add-Type -Path ($PWD.path + '\tools\BCrypt.Net-Next.dll')
+    $salt = [bcrypt.net.bcrypt]::generatesalt()
+    $hashedpass = [bcrypt.net.bcrypt]::hashpassword($password, $Salt)
+
+    $contents = $username + ':' + $hashedpass
+    Return $contents
 }
