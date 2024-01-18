@@ -25,6 +25,9 @@
   - https://www.neowin.net/news/canonical--microsoft-make-azure-tailored-linux-kernel/
   - https://www.altaro.com/hyper-v/powershell-script-change-advanced-settings-hyper-v-virtual-machines/
 
+
+  The .htpasswd generator works! guestadminuser/password will be set as the web basic auth login as well
+  
   This script needs 2 more things:
     - make the advanced settings import work
     - find a good clean way to launch docker-compose up once cloud-init is complete
@@ -457,7 +460,7 @@ users:
     plain_text_passwd: !!@GuestAdminPassword@!!
     lock_passwd: false
     ssh_authorized_keys:
-      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJIFojWQgEyg1bfyn4ncMDGTBAcumQcPkOvIBqTAqKVQ luke@GS-RXLar"
+      !!@ssh_keys@!!
 
 disable_root: true    # true: notify default user account / false: allow root ssh login
 ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
@@ -597,8 +600,8 @@ write_files:
           image: ghcr.io/maxmind/geoipupdate
           restart: unless-stopped
           environment:
-            - 'GEOIPUPDATE_ACCOUNT_ID=154796'
-            - 'GEOIPUPDATE_LICENSE_KEY=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'
+            - 'GEOIPUPDATE_ACCOUNT_ID=!!@MaxmindID@!!'
+            - 'GEOIPUPDATE_LICENSE_KEY=!!@MaxmindKey@!!'
             - 'GEOIPUPDATE_EDITION_IDS=GeoLite2-ASN GeoLite2-City GeoLite2-Country'
             - GEOIPUPDATE_FREQUENCY=72
           networks:
