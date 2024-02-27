@@ -5,16 +5,18 @@
   All defaults are set. Running the script without any parameters will create an Ubuntu 22.04 VM
   Create a userdata file and put it in this script as $userdata_template
 
-.EXAMPLE
-  .\New-LinuxVM.ps1 -name 'teste20' -IP "10.2.2.180" -verbose
-  PS C:\> .\New-LinuxVM.ps1
-  PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 60GB -VMName "azure-1" -ImageVersion "20.04" -VirtualSwitchName "SW01" -VMGeneration 2
-  PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 8GB -VMName "debian11" -ImageVersion 11 -virtualSwitchName "External Switch" -VMGeneration 2 -GuestAdminUsername admin -GuestAdminPassword admin -VMMachine_StoragePath "D:\Hyper-V\" -NetAddress 192.168.188.12 -NetNetmask 255.255.255.0 -NetGateway 192.168.188.1 -NameServers "192.168.188.1"
-  It should download cloud image and create VM, please be patient for first boot - it could take 10 minutes
-  and requires network connection on VM
 .NOTES
-  Original script: https://blogs.msdn.microsoft.com/virtual_pc_guy/2015/06/23/building-a-daily-ubuntu-image-for-hyper-v/
+
+  My fork (less monolithic than this script): https://github.com/Luke-Williams9/hyperv-vm-provisioning
+  
+  Thanks to schtritoff for the doing most of the dirty work:
   This projected Forked from: https://github.com/schtritoff/hyperv-vm-provisioning
+
+  Thanks to Benjamin Armstrong for the original script:
+  https://blogs.msdn.microsoft.com/virtual_pc_guy/2015/06/23/building-a-daily-ubuntu-image-for-hyper-v/
+  Ben Armstrongs blog:
+  https://american-boffin.bawkie.com/
+  
   References:
   - https://git.launchpad.net/cloud-init/tree/cloudinit/sources/DataSourceAzure.py
   - https://github.com/Azure/azure-linux-extensions/blob/master/script/ovf-env.xml
@@ -24,21 +26,22 @@
   - https://gist.github.com/Informatic/0b6b24374b54d09c77b9d25595cdbd47
   - https://www.neowin.net/news/canonical--microsoft-make-azure-tailored-linux-kernel/
   - https://www.altaro.com/hyper-v/powershell-script-change-advanced-settings-hyper-v-virtual-machines/
+
+  It should download cloud image and create VM, please be patient for first boot - it could take 10 minutes
+  and requires network connection on VM
+  
 #>
 
-<# -------------------------------------------------------- Parameters ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Parameters --------------------------------------------------------------------------------------------- #>
 
 #requires -Modules Hyper-V
 #requires -RunAsAdministrator
 [cmdletBinding()]
 param (
   [switch] $Force = $false,
-  [Parameter()][Alias("user","username","u")]
   [string] $GuestAdminUsername = "admin",
-  [Parameter()][Alias("password","pass","p")]
   [string] $GuestAdminPassword,
   [string] $GuestAdminSshPubKey,
-  [Parameter()][Alias("version",'distroVersion','ver')]
   [string] $ImageVersion,
   [string] $KeyboardLayout = "us", # 2-letter country code, for more info https://wiki.archlinux.org/title/Xorg/Keyboard_configuration
   [string] $KeyboardModel, # default: "pc105"
@@ -46,7 +49,6 @@ param (
   [string] $Locale = ((Get-Culture).Name.replace('-','_')) + '.UTF-8', # "en_US.UTF-8",
   [string] $NetMacAddress,
   [string] $NetInterface  = "eth0",
-  [Parameter()][Alias("IP")]
   [string] $NetAddress,
   [string] $NetNetmask,
   [string] $NetNetwork,
@@ -55,23 +57,18 @@ param (
   [switch] $NoStart, # Set to True to prevent starting the VM at the end of the script
   [string] $tempRoot = "${env:systemdrive}\linuxVMtemp",
   [string] $TimeZone, # UTC or continental zones of IANA DB like: Europe/Berlin. https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-  [Parameter()][Alias("name")]
   [string] $VMName,
   [int]    $VMGeneration = 1, # create gen1 hyper-v machine because of portability to Azure (https://docs.microsoft.com/en-us/azure/virtual-machines/windows/prepare-for-upload-vhd-image)
-  [Parameter()][Alias("CPU","CPUcores","Cores")]
-  [int]    $VMProcessorCount = 2,
+  [int]    $VMProcessorCount = 4,
   [bool]   $VMDynamicMemoryEnabled = $false,
-  [Parameter()][Alias("RAM","Memory")]
-  [uint64] $VMMemoryStartupBytes = 1024MB,
+  [uint64] $VMMemoryStartupBytes = 4GB,
   [uint64] $VMMinimumBytes = $VMMemoryStartupBytes,
   [uint64] $VMMaximumBytes = $VMMemoryStartupBytes,
-  [uint64] $VHDSizeBytes = 16GB,
+  [uint64] $VHDSizeBytes = 96GB,
   [switch] $VMdataVol = $false,
   [uint64] $VMdataVolSizeBytes = 64GB,
   [string] $VMdataVolMountPoint = '/mnt/data',
-  [Parameter()][Alias("vSwitch")]
   [string] $VirtualSwitchName,
-  [Parameter()][Alias("vlan")]
   [string] $VMVlanID,
   [string] $VMNativeVlanID,
   [string] $VMAllowedVlanIDList,
@@ -82,109 +79,42 @@ param (
   [switch] $VMMacAddressSpoofing = $false,
   [switch] $VMExposeVirtualizationExtensions = $false,
   [string] $VMVersion = (Get-VMHostSupportedVersion | Where-Object IsDefault).Version,
-  [Parameter()][Alias("hostname")]
   [string] $VMHostname,
   [string] $VMpath, # if not defined here default Virtal Machine path is used
   [string] $VHDpath # if not defined here Hyper-V settings path / fallback path is set below
 )
 
+
 $ErrorActionPreference = 'Stop'
+
+# Make sure this script runs in a 64 bit environment
+if ($env:PROCESSOR_ARCHITEW6432 -eq "AMD64") {
+  write-warning "Executing your script in 64-bit mode"
+  if ($myInvocation.Line) {
+    &"$env:WINDIR\sysnative\windowspowershell\v1.0\powershell.exe" -NonInteractive -NoProfile $myInvocation.Line
+  } else {
+    &"$env:WINDIR\sysnative\windowspowershell\v1.0\powershell.exe" -NonInteractive -NoProfile -file "$($myInvocation.InvocationName)" $args
+  }
+  exit $lastexitcode
+}
+$Global:CFId = 'your_id_here'
+$Global:CFsecret = 'your_secret_here'
+
+if ($env:adminUser) {
+  $guestAdminUsername = $env:adminUser
+}
+if ($env:adminpassword) {
+  $guestAdminPassword = $env:adminpassword
+}
+if ($env:vmHostname) {
+  $VMName = $env:vmHostname
+}
+if ($env:ipAddress) {
+  $NetAddress = $env:ipAddress
+}
+
 <# -------------------------------------------------------- Functions ---------------------------------------------------------------------------------------------- #>
 
-    function Get-DnsInfo {
-      # Try to get DNS servers and domain suffix from network configuration
-      $networkConfig = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
-
-      $dnsServers = $networkConfig.DNSServerSearchOrder | Where-Object { $_ -ne $null } | Select-Object -Unique
-      $domainSuffix = $networkConfig.DNSDomainSuffixSearchOrder | Where-Object { $_ -ne $null } | Select-Object -Unique
-
-      if ($dnsServers.Count -eq 0) {
-          # If DNS servers are not configured, fall back to default gateway
-          $defaultGateway = (
-              Get-NetRoute -AddressFamily IPv4 | Where-Object { 
-                  $_.DestinationPrefix -eq '0.0.0.0/0' 
-          }).NextHop
-          $dnsServers = (Resolve-DnsName -Name $defaultGateway).QueryResults.QueryData.IPAddress | Where-Object { $_ -ne $null } | Select-Object -Unique
-      }
-
-      return @{
-          DnsServers = $dnsServers
-          DomainSuffix = $domainSuffix
-      }
-    }
-    function Render-Template {
-      # Read a config file template, match any strings surrounded by $pre and $post, to keys of the same name in $Variables
-      # and replace them with the value of the key in $Variables
-      # If the key is not found or is null, comment out the line with preserved indentation
-      # 
-      [CmdletBinding()]
-      param (
-          [string]$Template,
-          [hashtable]$Variables,
-          [string]$pre = '!!@',
-          [string]$post = '@!!',
-          [string]$comment = '# '
-      )
-      
-      $regex = "$pre(\w+)$post"
-      $templateContent = $Template -split "`n"
-
-      for ($i = 0; $i -lt $templateContent.Count; $i++) {
-          $line = $templateContent[$i]
-          $match = [regex]::Matches($line, $regex)
-
-          foreach ($m in $match) {
-              $var = $m.Groups[1].Value
-              If ($Variables.ContainsKey($var) -and $Variables[$var] -notin $null,'') {
-                  $line = $line -replace "$pre$var$post", $Variables[$var]
-              } Else {
-                  # If variable not found or is null, comment out the line with preserved indentation
-                  $leadingWhitespace = $line -replace '^(\s*).*$','$1'
-                  $line = $leadingWhitespace + $comment + ($line.trim() -replace $regex, '')
-                  break  # No need to check further If one variable in the line is null or not found
-              }
-          } 
-
-          $templateContent[$i] = $line
-      }
-      #return $templateContent -join "`n"
-      return ($templateContent -join "`n" -replace $regex, '')
-    }
-    Function Fetch-Checksums {
-      [CmdletBinding()]
-      param (
-          [parameter(position=0)][string]$url,
-          [parameter(position=1)][string]$pattern = '^(?<Checksum>[a-fA-F0-9]+)\s+(?<FileName>.+)$'
-      )
-      If ( -not $url) {
-          Throw "No URL specified"
-      }
-      $count = 0
-      Do {
-          Try {
-              $response = Invoke-WebRequest -Uri $url -UseBasicParsing
-              $success = $?
-          }
-          Catch {
-              Write-Warning "Failed to download checksums: $_"
-              Write-Warning "Retrying in 5 seconds..."
-              Start-Sleep -Seconds 5
-          }
-          $count++
-      } While ( -not $success -and $count -lt 5 )
-      If (-not $success) {
-          Throw $_
-      }
-      $matches = $response.RawContent -split '\r?\n' | ForEach-Object {
-          If ($_ -match $pattern) {
-              [PSCustomObject] @{
-                  FileName = $Matches['FileName'].Trim('*')
-                  Checksum = $Matches['Checksum']
-              }
-          }
-      }
-      Return $matches
-    }
     Function cleanupFile ([string]$file) {
       If (test-path $file) {
         Remove-Item $file -force
@@ -238,22 +168,61 @@ $ErrorActionPreference = 'Stop'
           }
       }
     }
-    Function Make-Random {
-      Param  ( 
-          [parameter(position=0)][int]$count = 10,
-          [switch]$uppercase,
-          [switch]$hex
+    Function Fetch-Checksums {
+      [CmdletBinding()]
+      param (
+          [parameter(position=0)][string]$url,
+          [parameter(position=1)][string]$pattern = '^(?<Checksum>[a-fA-F0-9]+)\s+(?<FileName>.+)$'
       )
-      if ($hex) {
-          $charset = (0x30..0x39) + ( 0x41..0x47)
-      } else {
-          $charset = (0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A)
+      If ( -not $url) {
+          Throw "No URL specified"
       }
-      $result = (-join ($charset | Get-Random -Count $count | Foreach-Object {[char]$_}))
-      if ($uppercase) {
-          $result = $result.ToUpper()
+      $count = 0
+      Do {
+          Try {
+              $response = Invoke-WebRequest -Uri $url -UseBasicParsing
+              $success = $?
+          }
+          Catch {
+              Write-Warning "Failed to download checksums: $_"
+              Write-Warning "Retrying in 5 seconds..."
+              Start-Sleep -Seconds 5
+          }
+          $count++
+      } While ( -not $success -and $count -lt 5 )
+      If (-not $success) {
+          Throw $_
       }
-      Return $result
+      $matches = $response.RawContent -split '\r?\n' | ForEach-Object {
+          If ($_ -match $pattern) {
+              [PSCustomObject] @{
+                  FileName = $Matches['FileName'].Trim('*')
+                  Checksum = $Matches['Checksum']
+              }
+          }
+      }
+      Return $matches
+    }
+    function Get-DnsInfo {
+      # Try to get DNS servers and domain suffix from network configuration
+      $networkConfig = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+
+      $dnsServers = $networkConfig.DNSServerSearchOrder | Where-Object { $_ -ne $null } | Select-Object -Unique
+      $domainSuffix = $networkConfig.DNSDomainSuffixSearchOrder | Where-Object { $_ -ne $null } | Select-Object -Unique
+
+      if ($dnsServers.Count -eq 0) {
+          # If DNS servers are not configured, fall back to default gateway
+          $defaultGateway = (
+              Get-NetRoute -AddressFamily IPv4 | Where-Object { 
+                  $_.DestinationPrefix -eq '0.0.0.0/0' 
+          }).NextHop
+          $dnsServers = (Resolve-DnsName -Name $defaultGateway).QueryResults.QueryData.IPAddress | Where-Object { $_ -ne $null } | Select-Object -Unique
+      }
+
+      return @{
+          DnsServers = $dnsServers
+          DomainSuffix = $domainSuffix
+      }
     }
     Function Get-R2file {
       <#
@@ -322,8 +291,8 @@ $ErrorActionPreference = 'Stop'
         UseBasicParsing = $True
         Uri = ('https://r2.globalstormcdn.com/' + $file)
         Headers = @{
-          'CF-Access-Client-Id' = 'e7cc03e020debfe6e4076c6cb9d9b603.access'
-          'CF-Access-Client-Secret' = 'd8e6d0ec387ef395a4af7b7c039dd33e55d70b08f20b0ba12498204756878792'
+          'CF-Access-Client-Id' = $CFid
+          'CF-Access-Client-Secret' = $CFsecret
         }
         OutFile = ($outpath + $file)
       }
@@ -378,10 +347,64 @@ $ErrorActionPreference = 'Stop'
         fullName = $request.OutFile
         SHA256 = (Get-Filehash $request.OutFile -algorithm SHA256).hash
       }
-
-
     }
-<# ----------------------------------------------------------------- USERDATA -------------------------------------------------------------------------------------- #>
+    Function Make-Random {
+      Param  ( 
+          [parameter(position=0)][int]$count = 10,
+          [switch]$uppercase,
+          [switch]$hex
+      )
+      if ($hex) {
+          $charset = (0x30..0x39) + ( 0x41..0x47)
+      } else {
+          $charset = (0x30..0x39) + ( 0x41..0x5A) + ( 0x61..0x7A)
+      }
+      $result = (-join ($charset | Get-Random -Count $count | Foreach-Object {[char]$_}))
+      if ($uppercase) {
+          $result = $result.ToUpper()
+      }
+      Return $result
+    }
+    function Render-Template {
+      # Read a config file template, match any strings surrounded by $pre and $post, to keys of the same name in $Variables
+      # and replace them with the value of the key in $Variables
+      # If the key is not found or is null, comment out the line with preserved indentation
+      # 
+      [CmdletBinding()]
+      param (
+          [string]$Template,
+          [hashtable]$Variables,
+          [string]$pre = '!!@',
+          [string]$post = '@!!',
+          [string]$comment = '# '
+      )
+      
+      $regex = "$pre(\w+)$post"
+      $templateContent = $Template -split "`n"
+
+      for ($i = 0; $i -lt $templateContent.Count; $i++) {
+          $line = $templateContent[$i]
+          $match = [regex]::Matches($line, $regex)
+
+          foreach ($m in $match) {
+              $var = $m.Groups[1].Value
+              If ($Variables.ContainsKey($var) -and $Variables[$var] -notin $null,'') {
+                  $line = $line -replace "$pre$var$post", $Variables[$var]
+              } Else {
+                  # If variable not found or is null, comment out the line with preserved indentation
+                  $leadingWhitespace = $line -replace '^(\s*).*$','$1'
+                  $line = $leadingWhitespace + $comment + ($line.trim() -replace $regex, '')
+                  break  # No need to check further If one variable in the line is null or not found
+              }
+          } 
+
+          $templateContent[$i] = $line
+      }
+      #return $templateContent -join "`n"
+      return ($templateContent -join "`n" -replace $regex, '')
+    }
+
+<# -------------------------------------------------------- USERDATA ----------------------------------------------------------------------------------------------- #>
 
 # Userdata.ubuntu-docker.template
 $userdata_template = @'
@@ -392,6 +415,8 @@ $userdata_template = @'
 
 hostname: !!@VMHostname@!!
 fqdn: !!@FQDN@!!
+# prefer_fqdn_over_hostname: true
+
 # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
 # /etc/defaults/locale set and results into error
 #locale: $Locale
@@ -416,6 +441,8 @@ packages:
   - linux-tools-virtual
   - linux-cloud-tools-virtual
   - linux-azure
+  - snmp
+  - snmpd
 
 # https://learn.microsoft.com/en-us/azure/virtual-machines/linux/cloudinit-add-user#add-a-user-to-a-vm-with-cloud-init
 
@@ -430,18 +457,10 @@ users:
     plain_text_passwd: !!@GuestAdminPassword@!!
     lock_passwd: false
     ssh_authorized_keys:
-      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJIFojWQgEyg1bfyn4ncMDGTBAcumQcPkOvIBqTAqKVQ luke@GS-RXLar"
+    !!@ssh_keys@!!
 
 disable_root: true    # true: notify default user account / false: allow root ssh login
 ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
-
-#ssh_authorized_keys:
-#  - ssh-rsa AAAAB... comment
-
-# bootcmd can be setup like runcmd but would run at very early stage
-# on every cloud-init assisted boot if not prepended by command "cloud-init-per once|instance|always":
-# bootcmd:
-#   - 'echo "HELLO" > ~/hello.txt'
 
 runcmd:
   # remove metadata iso
@@ -456,10 +475,10 @@ runcmd:
   - 'locale-gen "!!@Locale@!!"'
   - 'update-locale "!!@Locale@!!"'
   # - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
-
+  # Start elastiflow only after cloud-init is complete
+  - 'systemctl enable docker-bootstrap.service'
+  - 'systemctl start docker-bootstrap.service'
 write_files:
-  # hyperv-daemons package in mosts distros is missing this file and spamming syslog:
-  # https://github.com/torvalds/linux/blob/master/tools/hv/hv_get_dns_info.sh
   - content: |
       #!/bin/bash
       # This example script parses /etc/resolv.conf to retrive DNS information.
@@ -473,8 +492,6 @@ write_files:
       # entries.
       cat /etc/resolv.conf 2>/dev/null | awk '/^nameserver/ { print $2 }'
     path: /usr/libexec/hypervkvpd/hv_get_dns_info
-  # hyperv-daemons package in mosts distros is missing this file and spamming syslog:
-  # https://github.com/torvalds/linux/blob/master/tools/hv/hv_get_dhcp_info.sh
   - content: |
       #!/bin/bash
       # SPDX-License-Identifier: GPL-2.0
@@ -506,11 +523,38 @@ write_files:
       fi
     path: /usr/libexec/hypervkvpd/hv_get_dhcp_info
   - content: |
+      {"attributes":{"buildNum":6867,"defaultIndex":"elastiflow-flow-ecs-*","defaultRoute":"/app/dashboards#/view/4a608bc0-3d3e-11eb-bc2c-c5758316d788?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-15m,to:now))&_a=(description:'',filters:!(),fullScreenMode:!f,options:(hidePanelTitles:!f,useMargins:!f),query:(language:kuery,query:''),timeRestore:!f,title:'ElastiFlow%20(flow):%20Overview',viewMode:view)","doc_table:highlight":false,"filters:pinnedByDefault":true,"format:number:defaultPattern":"0,0.[00]","format:percent:defaultPattern":"0,0.[00]%","state:storeInSessionStorage":true,"theme:darkMode":true,"timepicker:quickRanges":"[\r\n  {\r\n    \"from\": \"now-15m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 15 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-30m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-1h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 1 hour\"\r\n  },\r\n  {\r\n    \"from\": \"now-2h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 2 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-4h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 4 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-12h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 12 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-24h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 24 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-48h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 48 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-7d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 7 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-30d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-60d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 60 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-90d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 90 days\"\r\n  }\r\n]","timepicker:timeDefaults":"{\r\n  \"from\": \"now-1h/m\",\r\n  \"to\": \"now\"\r\n}"},"id":"2.11.1","migrationVersion":{"config":"7.9.0"},"references":[],"type":"config","updated_at":"2024-01-13T00:32:11.594Z","version":"WzQxMyw3XQ=="}
+      {"exportedCount":1,"missingRefCount":0,"missingReferences":[]}
+    path: /opt/elastiflow/elastiflow/advancedSettings.ndjson
+  - content: |
+      \v
+      \s \r \m
+
+      \d \t
+
+      \n :: \4{eth0}
+      _
+    path: /etc/issue
+  - content: |
+      [Unit]
+      Description=Docker Bootstrapper Service
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/opt/elastiflow
+      ExecStartPre=/bin/bash -c 'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
+      ExecStart=docker-compose up -d
+
+      [Install]
+      WantedBy=default.target
+    path: /etc/systemd/system/docker-bootstrap.service
+  - content: |
       {
         "userland-proxy": false
       }
     path: /etc/docker/daemon.json
-
 mount_default_fields: [ None, None, "auto", "defaults,nofail", "0", "2" ]
 !!@mounts@!!
 
@@ -529,7 +573,6 @@ power_state:
   mode: reboot
   message: Provisioning finished, will reboot ...
   timeout: 15
-
 '@  
     
 <# -------------------------------------------------------- Include, Module, Variables ----------------------------------------------------------------------------- #>
@@ -550,10 +593,10 @@ if ($psversiontable.psversion.Major -ge 6) {
 <# -------------------------------------------------------- Download binary tools from GSIT R2 storage ------------------------------------------------------------- #>
 
 $wrk = "$env:programdata\gsit"
-$tzip = "hv-vm-provison-tools.zip"
+$tzip = "hv-prov-tools_a.zip"
 $zipfile  = "$wrk\$tzip"
 $unzip = "$wrk\hv-vm-provision"
-$tzip_hash = '2C9527A3B8FEC795D85A6CD87A9C4D067167BE99C43727FA2AD7D5D5654C37C4'
+$tzip_hash = 'C2D86B5DF1BADF00125B098CBCC1393CC4D54BA50176B8814C3F1AEE07935D30'
 $bins = Get-R2file $tzip -outpath $wrk -sha256 $tzip_hash
 $bins | Format-List | Out-String
 New-Item -ItemType Directory -Path $unzip -force | Out-Null
@@ -569,8 +612,10 @@ $qemuImgPath = Join-Path $unzip "tools\qemu-img\qemu-img.exe"
 # Windows version of tar for extracting tar.gz files, src: https://github.com/libarchive/libarchive
 $bsdtarPath = Join-Path $unzip "tools\bsdtar.exe"
 
+# BCrypt dot Net, src: https://github.com/BcryptNet/bcrypt.net/releases - download and unzip the nupkg. its in there
+$bCryptPath = Join-Path $unzip "tools\BCrypt.Net-Next.dll"
 
-<# -------------------------------------------------------- Hardware validation ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Hardware validation ------------------------------------------------------------------------------------ #>
 
 # RAM check - leave 1GB free on the host
 $freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum)
@@ -600,7 +645,7 @@ if ($TimeZone -in $null, '') {
   $TimeZone = 'Etc/GMT' + $tzPre + [string]([math]::abs($baseTZ))
 }
 
-<# -------------------------------------------------------- Generate VM parameters --------------------------------------------------------------------#>
+<# -------------------------------------------------------- Generate VM parameters --------------------------------------------------------------------------------- #>
 
 # Generate VM / Hostname if blank
 If ($VMName -in $null, '') {
@@ -699,6 +744,10 @@ $rSplat = @{
 }
 $VmMachineId = "{0:####-####-####-####}-{1:####-####-##}" -f (Get-Random @rSplat),(Get-Random @rSplat)
 
+
+# Java heap size for Opensearch - should be around 1/2 VM RAM
+$javaHeap = [string]([math]::round(($VMMemoryStartupBytes/1MB)/2)) + 'm'
+
 # Temp path
 $tp = Join-Path $tempRoot "temp"
 $tempPath = Join-Path $tp $vmMachineId
@@ -706,7 +755,7 @@ Remove-Item -path $tp -recurse -force -confirm:$false -ErrorAction SilentlyConti
 New-Item -ItemType Directory -path $tempPath -force | Out-Null
 Write-Verbose "Using temp path: $tempPath"
 
-<# -------------------------------------------------------- Cleanup old VM ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Cleanup old VM ----------------------------------------------------------------------------------------- #>
 
 # Disabling this by default, since this script wil be in our Ninja tenant. just for safety yunno
 # Delete the VM if it is around
@@ -716,7 +765,7 @@ if ($vm) {
   Throw "VM $VMName already exists. Cleanup-VM is commented out"
 }
 
-<# -------------------------------------------------------- Virtual Network ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Virtual Network ---------------------------------------------------------------------------------------- #>
 
 # Make sure we have a virtual switch to connect to, if not, then error out before we do anything else
 If ($virtualSwitchName -notin "",$null) {
@@ -769,7 +818,7 @@ $distro = [PSCustomObject] @{
   }
 }
   
-<# -------------------------------------------------------- Image URL and local path variables ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Image URL and local path variables --------------------------------------------------------------------- #>
 
 Write-Verbose "Selected distro:"
 Write-Verbose ($distro | Format-List | Out-String)
@@ -811,8 +860,7 @@ if ($VMpath -in $null,'')  { $VMpath = $hvInfo.VirtualMachinePath }
 if ($VHDpath -in $null,'') { $VHDpath = $hvInfo.VirtualHardDiskPath }
 Foreach ($d in $VMpath, $VHDpath) { New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null }
 
-
-<# -------------------------------------------------------- Metadata ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Metadata ----------------------------------------------------------------------------------------------- #>
 
 # There is a documentation failure not mention needed dsmode setting:
 # https://gist.github.com/Informatic/0b6b24374b54d09c77b9d25595cdbd47
@@ -830,8 +878,7 @@ Write-Verbose "Metadata:"
 Write-Verbose $metadata
 Write-Verbose ""
 
-
-<# -------------------------------------------------------- Create Network settings ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Create Network settings -------------------------------------------------------------------------------- #>
 
 # Just use v2 configuration. we will mostly be using up to date linux images
 # Azure:   https://cloudinit.readthedocs.io/en/latest/topics/datasources/azure.html
@@ -862,10 +909,13 @@ If ( -not $NetAutoconfig ) {
   $networkConfig = $netV2
 }
 
-<# -------------------------------------------------------- Create Userdata ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Create Userdata ---------------------------------------------------------------------------------------- #>
 
 # Gonna still use Render-Template for userdata inside this script
 # userdata for cloud-init, https://cloudinit.readthedocs.io/en/latest/topics/examples.html
+
+$env_sshkeys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJIFojWQgEyg1bfyn4ncMDGTBAcumQcPkOvIBqTAqKVQ luke@GS-RXLar"
+
 $user_settings = @{
   createdDateStamp    = Get-Date -UFormat "%b/%d/%Y %T %Z"
   VMHostname          = $VMHostname
@@ -873,32 +923,32 @@ $user_settings = @{
   TimeZone            = $TimeZone
   Locale              = $Locale
   GuestAdminUsername  = $GuestAdminUsername
-  GuestAdminPassword  =  $GuestAdminPassword
-  SSHkeys             = ''
+  GuestAdminPassword  = $GuestAdminPassword
+  ssh_keys            = '  - ' + ($env_sshkeys -join "`n    - ")
   docker_write_files  = $docker_write_files
   NameServers         = "'" + ($NameServers -join "', '") + "'"
   DomainName          = $hostNetInfo.DomainSuffix.ToLower()
   KeyboardLayout      = $KeyboardLayout
   Mounts              = ''
+  JavaHeap            = $JavaHeap
+
 }
 
 If ($VMdataVol) {
   $user_settings.Mounts = "mounts:`n  - [ sdb, $VMdataVolMountPoint ]"
 }
-If ($GuestAdminSshPubKey -notin '', $null) {
-  $user_settings.SSHkeys = "    ssh_authorized_keys:`n  - $GuestAdminSshPubKey"
-}
 
 # Userdata is large, complex, and full of characters which can require escaping.
-# Its best defined inside a single quote here-string, where nothing needs to be escaped.
+# For a monolithic script like this, Its best defined inside a single quote here-string, where nothing needs to be escaped.
 # Render-Template will insert all the variables we need
 $userdata = Render-Template -Template $userdata_template -Variables $user_settings
 
 Write-Verbose "Userdata:"
 Write-Verbose $userdata
 Write-Verbose ""
+Set-Content "debug-userdata.yml" "$userdata"
 
-<# -------------------------------------------------------- Write all the files ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Write all the files ------------------------------------------------------------------------------------ #>
 
 # Make temp location for iso image
 New-Item -ItemType Directory -Path "$($tempPath)\Bits" | Out-Null
@@ -913,11 +963,16 @@ If ($PSVersionTable.PSVersion.Major -ge 6) {
     Encoding = 'Byte'
   }
 }
+Write-Verbose "Write metadata..."
 Set-Content "$($tempPath)\Bits\meta-data" ([byte[]][char[]] "$metadata") @cSplat
 If ($NetAutoconfig -eq $false) {
+  Write-Verbose "Write network-config"
   Set-Content "$($tempPath)\Bits\network-config" ([byte[]][char[]] "$networkconfig") @cSplat
 }
-Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") @cSplat
+Write-Verbose "Write user-data..."
+#Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") @cSplat
+Set-Content "$tempPath\Bits\user-data" "$userdata" #@cSplat
+
 
 # Create meta data ISO image, src: https://cloudinit.readthedocs.io/en/latest/topics/datasources/nocloud.html
 # both azure and nocloud support same cdrom filesystem 
@@ -943,7 +998,7 @@ If ( -not (test-path "$metaDataIso") ) {
 Write-Verbose "Metadata iso written"
 Write-Host -ForegroundColor Green " Done."
 
-<# -------------------------------------------------------- Download and parse checksum file ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Download and parse distro checksum file ---------------------------------------------------------------- #>
 
 # Storage path for base images
 $ImageCachePath = Join-Path $tempRoot "BaseImages"
@@ -970,8 +1025,7 @@ Switch -Wildcard ($ImageHashFilename) {
   Default    { Throw "$ImageHashFilename hashing algorithm not supported." }
 }
 
-
-<# -------------------------------------------------------- Download and verify image ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Download and verify install image ---------------------------------------------------------------------- #>
 
 # If image of same name is present, check If checksum matches. Delete If not matched
 If (Test-Path $ImageFilePath) {
@@ -997,8 +1051,7 @@ If ( $c -ne $checksum.checksum) {
   Throw "Checksum mismatch on newly downloaded file $($ImageFilePath) `r`n$($checksum.Checksum)`r`n$c" 
 }
 
-
-<# -------------------------------------------------------- Extract image ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Extract image ------------------------------------------------------------------------------------------ #>
 
 # Delete an existing VHD and re-extract it from the verified image
 $imageVHD = "${ImageCachePath}\${ImageFileName}-temp.vhd"
@@ -1033,7 +1086,7 @@ Switch ($ImageFileExtension) {
    }
 }
 
-<# -------------------------------------------------------- Convert Image to VHD ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Convert Image to VHD ----------------------------------------------------------------------------------- #>
 
 # There should be only a single image file in $imageUnzipPath
 $fileExpanded = (Get-ChildItem $imageUnzipPath).fullname
@@ -1065,7 +1118,7 @@ Remove-Item "$fileExpanded" -force -confirm:$false
 
 Write-Host -ForegroundColor Green " Done."
 
-<# -------------------------------------------------------- Convert fixed VHD to dynamic ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Convert fixed VHD to dynamic --------------------------------------------------------------------------- #>
 
 Write-Host 'Convert VHD fixed to VHD dynamic...' 
 Try {
@@ -1087,7 +1140,7 @@ Catch {
 
 Resize-VHD -path $ImageVHDfinal -SizeBytes $VHDSizeBytes
 
-<# -------------------------------------------------------- Deploy VHD ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Deploy VHD --------------------------------------------------------------------------------------------- #>
 
 # File path for to-be provisioned VHD
 $VMDiskPath = "$($VHDpath)\$($VMName).vhd"
@@ -1113,7 +1166,7 @@ Catch {
   Copy-Item $ImageVHDfinal -Destination $VMDiskPath
 }
 
-<# -------------------------------------------------------- Create Virtual Machine ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Create Virtual Machine --------------------------------------------------------------------------------- #>
 
 # Create new virtual machine and start it
 $vmSplat = @{

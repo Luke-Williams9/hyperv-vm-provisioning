@@ -5,16 +5,18 @@
   All defaults are set. Running the script without any parameters will create an Ubuntu 22.04 VM
   Create a userdata file and put it in this script as $userdata_template
 
-.EXAMPLE
-  .\New-LinuxVM.ps1 -name 'teste20' -IP "10.2.2.180" -verbose
-  PS C:\> .\New-LinuxVM.ps1
-  PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 60GB -VMName "azure-1" -ImageVersion "20.04" -VirtualSwitchName "SW01" -VMGeneration 2
-  PS C:\> .\New-LinuxVM.ps1 -VMProcessorCount 2 -VMMemoryStartupBytes 2GB -VHDSizeBytes 8GB -VMName "debian11" -ImageVersion 11 -virtualSwitchName "External Switch" -VMGeneration 2 -GuestAdminUsername admin -GuestAdminPassword admin -VMMachine_StoragePath "D:\Hyper-V\" -NetAddress 192.168.188.12 -NetNetmask 255.255.255.0 -NetGateway 192.168.188.1 -NameServers "192.168.188.1"
-  It should download cloud image and create VM, please be patient for first boot - it could take 10 minutes
-  and requires network connection on VM
 .NOTES
-  Original script: https://blogs.msdn.microsoft.com/virtual_pc_guy/2015/06/23/building-a-daily-ubuntu-image-for-hyper-v/
+
+  My fork (less monolithic than this script): https://github.com/Luke-Williams9/hyperv-vm-provisioning
+  
+  Thanks to schtritoff for the doing most of the dirty work:
   This projected Forked from: https://github.com/schtritoff/hyperv-vm-provisioning
+
+  Thanks to Benjamin Armstrong for the original script:
+  https://blogs.msdn.microsoft.com/virtual_pc_guy/2015/06/23/building-a-daily-ubuntu-image-for-hyper-v/
+  Ben Armstrongs blog:
+  https://american-boffin.bawkie.com/
+  
   References:
   - https://git.launchpad.net/cloud-init/tree/cloudinit/sources/DataSourceAzure.py
   - https://github.com/Azure/azure-linux-extensions/blob/master/script/ovf-env.xml
@@ -25,28 +27,21 @@
   - https://www.neowin.net/news/canonical--microsoft-make-azure-tailored-linux-kernel/
   - https://www.altaro.com/hyper-v/powershell-script-change-advanced-settings-hyper-v-virtual-machines/
 
-
-  The .htpasswd generator works! guestadminuser/password will be set as the web basic auth login as well
+  It should download cloud image and create VM, please be patient for first boot - it could take 10 minutes
+  and requires network connection on VM
   
-  This script needs 2 more things:
-    - make the advanced settings import work
-    - find a good clean way to launch docker-compose up once cloud-init is complete
-
 #>
 
-<# -------------------------------------------------------- Parameters ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Parameters --------------------------------------------------------------------------------------------- #>
 
 #requires -Modules Hyper-V
 #requires -RunAsAdministrator
 [cmdletBinding()]
 param (
   [switch] $Force = $false,
-  [Parameter()][Alias("user","username","u")]
   [string] $GuestAdminUsername = "admin",
-  [Parameter()][Alias("password","pass","p")]
   [string] $GuestAdminPassword,
   [string] $GuestAdminSshPubKey,
-  [Parameter()][Alias("version",'distroVersion','ver')]
   [string] $ImageVersion,
   [string] $KeyboardLayout = "us", # 2-letter country code, for more info https://wiki.archlinux.org/title/Xorg/Keyboard_configuration
   [string] $KeyboardModel, # default: "pc105"
@@ -54,7 +49,6 @@ param (
   [string] $Locale = ((Get-Culture).Name.replace('-','_')) + '.UTF-8', # "en_US.UTF-8",
   [string] $NetMacAddress,
   [string] $NetInterface  = "eth0",
-  [Parameter()][Alias("IP")]
   [string] $NetAddress,
   [string] $NetNetmask,
   [string] $NetNetwork,
@@ -63,23 +57,18 @@ param (
   [switch] $NoStart, # Set to True to prevent starting the VM at the end of the script
   [string] $tempRoot = "${env:systemdrive}\linuxVMtemp",
   [string] $TimeZone, # UTC or continental zones of IANA DB like: Europe/Berlin. https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-  [Parameter()][Alias("name")]
   [string] $VMName,
   [int]    $VMGeneration = 1, # create gen1 hyper-v machine because of portability to Azure (https://docs.microsoft.com/en-us/azure/virtual-machines/windows/prepare-for-upload-vhd-image)
-  [Parameter()][Alias("CPU","CPUcores","Cores")]
   [int]    $VMProcessorCount = 4,
   [bool]   $VMDynamicMemoryEnabled = $false,
-  [Parameter()][Alias("RAM","Memory")]
-  [uint64] $VMMemoryStartupBytes = 4096MB,
+  [uint64] $VMMemoryStartupBytes = 4GB,
   [uint64] $VMMinimumBytes = $VMMemoryStartupBytes,
   [uint64] $VMMaximumBytes = $VMMemoryStartupBytes,
-  [uint64] $VHDSizeBytes = 16GB,
+  [uint64] $VHDSizeBytes = 96GB,
   [switch] $VMdataVol = $false,
   [uint64] $VMdataVolSizeBytes = 64GB,
   [string] $VMdataVolMountPoint = '/mnt/data',
-  [Parameter()][Alias("vSwitch")]
   [string] $VirtualSwitchName,
-  [Parameter()][Alias("vlan")]
   [string] $VMVlanID,
   [string] $VMNativeVlanID,
   [string] $VMAllowedVlanIDList,
@@ -90,7 +79,6 @@ param (
   [switch] $VMMacAddressSpoofing = $false,
   [switch] $VMExposeVirtualizationExtensions = $false,
   [string] $VMVersion = (Get-VMHostSupportedVersion | Where-Object IsDefault).Version,
-  [Parameter()][Alias("hostname")]
   [string] $VMHostname,
   [string] $VMpath, # if not defined here default Virtal Machine path is used
   [string] $VHDpath # if not defined here Hyper-V settings path / fallback path is set below
@@ -98,33 +86,32 @@ param (
 
 $ErrorActionPreference = 'Stop'
 
-$Global:CFId = 'your_id_here'
-$Global:CFsecret = 'your_secret_here'
+# Make sure this script runs in a 64 bit environment
+if ($env:PROCESSOR_ARCHITEW6432 -eq "AMD64") {
+  write-warning "Executing your script in 64-bit mode"
+  if ($myInvocation.Line) {
+    &"$env:WINDIR\sysnative\windowspowershell\v1.0\powershell.exe" -NonInteractive -NoProfile $myInvocation.Line
+  } else {
+    &"$env:WINDIR\sysnative\windowspowershell\v1.0\powershell.exe" -NonInteractive -NoProfile -file "$($myInvocation.InvocationName)" $args
+  }
+  exit $lastexitcode
+}
+
+if ($env:adminUser) {
+  $guestAdminUsername = $env:adminUser
+}
+if ($env:adminpassword) {
+  $guestAdminPassword = $env:adminpassword
+}
+if ($env:vmHostname) {
+  $VMName = $env:vmHostname
+}
+if ($env:ipAddress) {
+  $NetAddress = $env:ipAddress
+}
 
 <# -------------------------------------------------------- Functions ---------------------------------------------------------------------------------------------- #>
 
-    Function Create-HTPasswd {
-      [cmdletBinding()]
-      param (
-          [parameter(Position=0)][string]$username,
-          [parameter(Position=1)][string]$password
-      )
-      # Take a plaintext username + password and generate the contents of an .htpasswd file for use with nginx
-      # uses bcrypt
-      # https://poshsecurity.com/blog/2013/4/12/password-hashing-with-bcrypt-and-powershell-part-2.html
-      # https://httpd.apache.org/docs/2.4/misc/password_encryptions.html
-      # https://github.com/BcryptNet/bcrypt.net/releases
-
-      if ( (-not $username) -or (-not $password) ) {
-          Throw "username and password must be specified"
-      }
-      Add-Type -Path ($PWD.path + '\tools\BCrypt.Net-Next.dll')
-      $salt = [bcrypt.net.bcrypt]::generatesalt()
-      $hashedpass = [bcrypt.net.bcrypt]::hashpassword($password, $Salt)
-
-      $contents = $username + ':' + $hashedpass
-      Return $contents
-    }
     Function cleanupFile ([string]$file) {
       If (test-path $file) {
         Remove-Item $file -force
@@ -234,130 +221,7 @@ $Global:CFsecret = 'your_secret_here'
           DomainSuffix = $domainSuffix
       }
     }
-    Function Get-R2file {
-      <#
-          .SYNOPSIS
-          Cloudflare R2 downloader with local / netcache functionality
-          by Luke Williams
-          
-          .DESCRIPTION
-          This is a function for downloading files from Cloudflare R2.
-          
-          The bucket name is 'downloads' and it is under the kirby@globalstormit.com Cloudflare account.
-          Its protected from public access via a service auth token thats in the below headers
-          Since Ninja has no global level custom fields yet, we unfortunately have to hardcode the token in the script for now.
-          
-          If the file is already present locally, and a matching SHA256 hash is provided, then the download is skipped.
-          If a lanCache UNC path is set for the org in Ninja, it will check for the file there. 
-          If the file is found on it, and the hash matches, then the LAN cache file will be used instead of downloading from R2.
-          
-          DISCLAIMER
-          
-          The use of this script and the access token contained herein is permitted only for Globalstorm use, within the NinjaOne envronment. 
-          If using this script or any part of it elsewhere, the access token must be changed.
-          
-          The 'access token' is comrpised of the following values in this script:
-          $request.Headers.'CF-Access-Client-Id' and $request.Headers.'CF-Access-Client-Secret'
-          
-          .PARAMETER file
-          The name of the file to download or copy
     
-          .PARAMETER outpath
-          The path to save the file to. does not include filename. Defaults to $env:temp if not provided
-    
-          .PARAMETER SHA256
-          Optional SHA256 hash, used to verify if a local copy of the file is valid. If it doesn't match (or if left blank) then one will be output by the function.
-    
-          .OUTPUTS
-          @{
-            [string]fullPath
-            [string]SHA256
-          }
-    
-          .EXAMPLE
-          $result = Get-R2file 'SentinelOneInstaller_windows_64bit.exe'
-    
-          .EXAMPLE
-          $result = Get-R2file 'SentinelOneInstaller_windows_64bit.exe' -outpath 'c:\downloads\test3\' -verbose
-      #>
-      [cmdletBinding()]
-      param (
-        [parameter(Mandatory=$True,Position=0)][string]$file,
-        [string]$outpath,
-        [string]$SHA256
-      )
-      
-      # Sanitize the inputs
-      if (-not $outpath) {
-        $outpath = $env:temp
-      }
-      if (-not $outpath.endswith('\')) { 
-        $outpath += '\'
-      }
-      $n = New-Item -ItemType Directory -Path $outpath -force | Out-Null
-      
-      # Create the request
-      $request = @{
-        UseBasicParsing = $True
-        Uri = ('https://r2.globalstormcdn.com/' + $file)
-        Headers = @{
-          'CF-Access-Client-Id' = $CFid
-          'CF-Access-Client-Secret' = $CFsecret
-        }
-        OutFile = ($outpath + $file)
-      }
-      
-      # Local caching - Does it already exist locally?
-        Write-Verbose $request.OutFile
-      if (Test-Path $request.OutFile) {
-        Write-Verbose "Exists locally"
-      } else {
-        Write-Verbose "Doesn't exist locally"
-        $dl = $true
-        # Is in a local network cache?
-        #$lanCache = Ninja-Property-Get "lanCache"
-        if ($lanCache) {
-          if (-not $lanCache.endswith('\')) { 
-            $lanCache += '\'
-          }
-          $netPath = $lanCache + $file
-          Write-Verbose "Checking network cache for: " 
-                Write-Verbose $netPath
-          if (Test-Path $netPath) {
-            Write-Verbose "Found!"
-            Copy-Item $netPath -destination $outPath
-            Write-Verbose "Copying to: " 
-                    Write-Verbose $outPath
-            $dl = $false
-          } else {
-              Write-Verbose "... Not found."
-          }
-        }  
-      }
-      
-      # Does the SHA256 hash match?
-      if (-not $dl) {
-        $oldHash = (Get-Filehash $request.OutFile -algorithm SHA256).Hash 
-        if ($oldHash -ne $SHA256) {
-          Write-Verbose "Filehash mismatch. redownloading..."
-          Remove-Item $request.OutFile
-          $dl = $true
-        } else {
-          Write-Verbose "Filehash matches."
-          $newHash = $oldHash
-        }
-      }
-      
-      if ($dl) {
-        # Download the file 
-        try { Invoke-Webrequest @request }
-        catch { throw $_.Exception }
-      }
-      return [PSCustomObject] @{
-        fullName = $request.OutFile
-        SHA256 = (Get-Filehash $request.OutFile -algorithm SHA256).hash
-      }
-    }
     Function Make-Random {
       Param  ( 
           [parameter(position=0)][int]$count = 10,
@@ -414,8 +278,7 @@ $Global:CFsecret = 'your_secret_here'
       return ($templateContent -join "`n" -replace $regex, '')
     }
 
-
-<# ----------------------------------------------------------------- USERDATA -------------------------------------------------------------------------------------- #>
+<# -------------------------------------------------------- USERDATA ----------------------------------------------------------------------------------------------- #>
 
 # Userdata.ubuntu-docker.template
 $userdata_template = @'
@@ -426,6 +289,8 @@ $userdata_template = @'
 
 hostname: !!@VMHostname@!!
 fqdn: !!@FQDN@!!
+# prefer_fqdn_over_hostname: true
+
 # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
 # /etc/defaults/locale set and results into error
 #locale: $Locale
@@ -450,6 +315,8 @@ packages:
   - linux-tools-virtual
   - linux-cloud-tools-virtual
   - linux-azure
+  - snmp
+  - snmpd
 
 # https://learn.microsoft.com/en-us/azure/virtual-machines/linux/cloudinit-add-user#add-a-user-to-a-vm-with-cloud-init
 
@@ -464,7 +331,7 @@ users:
     plain_text_passwd: !!@GuestAdminPassword@!!
     lock_passwd: false
     ssh_authorized_keys:
-      !!@ssh_keys@!!
+    !!@ssh_keys@!!
 
 disable_root: true    # true: notify default user account / false: allow root ssh login
 ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
@@ -476,263 +343,16 @@ runcmd:
   # disable cloud init on next boot (https://cloudinit.readthedocs.io/en/latest/topics/boot.html, https://askubuntu.com/a/1047618)
   - 'sh -c touch /etc/cloud/cloud-init.disabled'
   - 'echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf sudo sysctl -p'
-  - 'mkdir /opt/elastiflow/elastiflow'
-  - 'mkdir /opt/elastiflow/elastiflow/maxmind'
-  - 'mkdir /opt/elastiflow/nginx'
-  - 'mkdir /opt/elastiflow/certs'
   # set locale
   # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
   # /etc/defaults/locale set and results into error
   - 'locale-gen "!!@Locale@!!"'
   - 'update-locale "!!@Locale@!!"'
-  - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
+  # - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
+  # Start elastiflow only after cloud-init is complete
+  - 'systemctl enable docker-bootstrap.service'
+  - 'systemctl start docker-bootstrap.service'
 write_files:
-  - content: |
-      version: '3'
-      services:
-        dashboards-import:
-          build:
-            context: .
-            dockerfile: dashboards.py.dockerfile
-          volumes:
-            - ./elastiflow:/elastiflow
-          networks:
-            - opensearch-net
-          depends_on:
-            - dashboard # needs a health check
-        ssl-generator:
-          build:
-            context: .
-            dockerfile: openssl.dockerfile
-          environment:
-            DAYS: 365
-            SUBJECT: "/C=CA/ST=BC/L=TheCloud/O=SelfSignedCert/OU=IT/CN=elastiflow.local"
-          volumes:
-            - ./certs:/openssl-certs
-        nginx:
-          image: nginx
-          ports:
-            - "80:80"
-            - "443:443"
-          volumes:
-            - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-            - ./certs:/etc/nginx/ssl
-            - ./nginx/html:/etc/nginx/html
-            - ./nginx/.htpasswd:/etc/nginx/.htpasswd
-          networks:
-            - opensearch-net
-        opensearch:
-          image: opensearchproject/opensearch:latest
-          environment:
-            - cluster.name=opensearch-cluster
-            - node.name=os1
-            - discovery.type=single-node
-            - bootstrap.memory_lock=true
-            - "OPENSEARCH_JAVA_OPTS=-Xms1024m -Xmx1024m" # Set min and max JVM heap sizes to at least 50% of system RAM
-            - "DISABLE_INSTALL_DEMO_CONFIG=true" # Prevents execution of bundled demo script which installs demo certificates and security configurations to OpenSearch
-            - "DISABLE_SECURITY_PLUGIN=true" # Disables Security plugin
-          ulimits:
-            memlock:
-              soft: -1 # Set memlock to unlimited (no soft or hard limit)
-              hard: -1
-            nofile:
-              soft: 65536 # Maximum number of open files for the opensearch user - set to at least 65536
-              hard: 65536
-          volumes:
-            - opensearch-data:/usr/share/opensearch/data
-          ports:
-            - 127.0.0.1:9200:9200 # REST API
-            - 127.0.0.1:9600:9600 # Performance Analyzer
-          networks:
-            - opensearch-net
-        dashboard:
-          image: opensearchproject/opensearch-dashboards:latest
-          ports:
-            - 127.0.0.1:5601:5601 # Map host port 5601 to container port 5601
-          expose:
-            - "5601" # Expose port 5601 for web access to OpenSearch Dashboards
-          environment:
-            - 'OPENSEARCH_HOSTS="http://opensearch:9200"'
-            - "DISABLE_SECURITY_DASHBOARDS_PLUGIN=true"
-            - 'SERVER_BASEPATH="/a"'
-            - 'SERVER_REWRITEBASEPATH=true'
-            - 'SERVER_MAXPAYLOADBYTES=10485760'
-          networks:
-            - opensearch-net
-        flow-collector:
-          image: elastiflow/flow-collector:6.4.2
-          container_name: flow-collector
-          restart: 'unless-stopped'
-          network_mode: 'host'
-          volumes:
-            - ./elastiflow:/etc/elastiflow
-          environment:
-            EF_LICENSE_ACCEPTED: 'true'
-            EF_FLOW_SERVER_UDP_IP: '0.0.0.0'
-            EF_FLOW_SERVER_UDP_PORT: 9995
-            EF_OUTPUT_OPENSEARCH_ENABLE: 'true'
-            EF_OUTPUT_OPENSEARCH_ECS_ENABLE: 'true'
-            EF_OUTPUT_OPENSEARCH_TIMESTAMP_SOURCE: 'collect'
-            EF_OUTPUT_OPENSEARCH_INDEX_PERIOD: 'daily'
-            EF_OUTPUT_OPENSEARCH_INDEX_PREFIX: 'elastiflow'
-            EF_OUTPUT_OPENSEARCH_INDEX_TEMPLATE_SHARDS: 1
-            EF_OUTPUT_OPENSEARCH_INDEX_TEMPLATE_REPLICAS: 0
-            EF_OUTPUT_OPENSEARCH_ADDRESSES: '127.0.0.1:9200'
-            EF_OUTPUT_OPENSEARCH_USERNAME: 'admin'
-            EF_OUTPUT_OPENSEARCH_PASSWORD: 'admin'
-            EF_PROCESSOR_ENRICH_APP_ID_ENABLE: 'false'
-            EF_PROCESSOR_ENRICH_APP_IPPORT_ENABLE: 'false'
-            EF_PROCESSOR_ENRICH_IPADDR_METADATA_ENABLE: 'false'
-            EF_PROCESSOR_ENRICH_IPADDR_DNS_ENABLE: 'true'
-            EF_PROCESSOR_ENRICH_IPADDR_DNS_NAMESERVER_IP: '10.2.2.1'
-            EF_PROCESSOR_ENRICH_IPADDR_DNS_NAMESERVER_TIMEOUT: 3000
-            EF_PROCESSOR_ENRICH_IPADDR_DNS_RESOLVE_PRIVATE: 'true'
-            EF_PROCESSOR_ENRICH_IPADDR_DNS_RESOLVE_PUBLIC: 'true'
-            EF_PROCESSOR_ENRICH_IPADDR_MAXMIND_ASN_ENABLE: 'true'
-            EF_PROCESSOR_ENRICH_IPADDR_MAXMIND_ASN_PATH: '/etc/elastiflow/maxmind/GeoLite2-ASN.mmdb'
-            EF_PROCESSOR_ENRICH_IPADDR_MAXMIND_GEOIP_ENABLE: 'true'
-            EF_PROCESSOR_ENRICH_IPADDR_MAXMIND_GEOIP_PATH: '/etc/elastiflow/maxmind/GeoLite2-City.mmdb'
-            EF_PROCESSOR_ENRICH_IPADDR_MAXMIND_GEOIP_VALUES: 'city,country,country_code,location,timezone'
-            EF_PROCESSOR_ENRICH_IPADDR_MAXMIND_GEOIP_LANG: 'en'
-            EF_PROCESSOR_ENRICH_IPADDR_RISKIQ_THREAT_ENABLE: 'false'
-            EF_PROCESSOR_ENRICH_NETIF_METADATA_ENABLE: 'false'
-            EF_PROCESSOR_ENRICH_NETIF_FLOW_OPTIONS_ENABLE: 'true'
-            EF_PROCESSOR_ENRICH_NETIF_SNMP_ENABLE: 'false'
-            EF_PROCESSOR_ENRICH_NETIF_SNMP_COMMUNITIES: 'public'
-        geoipupdate:
-          container_name: geoipupdate
-          image: ghcr.io/maxmind/geoipupdate
-          restart: unless-stopped
-          environment:
-            - 'GEOIPUPDATE_ACCOUNT_ID=!!@MaxmindID@!!'
-            - 'GEOIPUPDATE_LICENSE_KEY=!!@MaxmindKey@!!'
-            - 'GEOIPUPDATE_EDITION_IDS=GeoLite2-ASN GeoLite2-City GeoLite2-Country'
-            - GEOIPUPDATE_FREQUENCY=72
-          networks:
-            - opensearch-net
-          volumes:
-            - ./elastiflow/maxmind:/usr/share/GeoIP
-      volumes:
-        opensearch-data:
-      networks:
-        opensearch-net:
-    path: /opt/elastiflow/docker-compose.yml
-  - content: |
-      FROM alpine:latest
-      RUN apk update && \
-          apk add --no-cache openssl && \
-          rm -rf "/var/cache/apk/*"
-      WORKDIR /app
-      RUN mkdir /openssl-certs
-      ENV CERT_FILENAME=server.crt
-      ENV KEY_FILENAME=server.key
-      ENV DAYS=365
-      RUN echo 'if [ ! -e /openssl-certs/$KEY_FILENAME ] || [ ! -e /openssl-certs/$CERT_FILENAME ]; then \
-          echo "Generating SSL certificates"; \
-          openssl genpkey -algorithm RSA -out /openssl-certs/$KEY_FILENAME && \
-          openssl req -new -x509 -key /openssl-certs/$KEY_FILENAME -out /openssl-certs/$CERT_FILENAME -days $DAYS -subj "/C=GB/ST=London/L=London/O=Global Security/OU=IT Department/CN=example.com"; \
-          echo $CERT_FILENAME; \
-          echo $KEY_FILENAME; \
-      fi' > /app/run.sh
-      RUN chmod +x /app/run.sh
-      CMD /app/run.sh
-    path: /opt/elastiflow/openssl.dockerfile
-  - content: |
-      FROM python:3.8
-      WORKDIR /app
-      RUN pip install requests
-      RUN echo '# script\n\
-      import requests\n\
-      import os\n\
-      import time\n\
-      dashboard_url = "https://raw.githubusercontent.com/elastiflow/elastiflow_for_opensearch/main/dashboards/flow/dashboards-2.0.x-flow-ecs.ndjson"\n\
-      dashboard_file  = "/app/dashboards-2.0.x-flow-ecs.ndjson"\n\
-      dashboard_file2 = "/elastiflow/advancedSettings.ndjson"\n\
-      api_url = "http://admin:admin@dashboard:5601/a/api/saved_objects/_import?overwrite=true"\n\
-      headers = {\n\
-          "osd-xsrf": "true",\n\
-          "securitytenant": "global"\n\
-      }\n\
-      max_retries = 10\n\
-      retry_count = 0\n\
-      print(f"Download dashboards")\n\
-      while retry_count < max_retries:\n\
-          print(f"Attempt ", retry_count)\n\
-          retry_count += 1\n\
-          response = requests.get(dashboard_url)\n\
-          print(f"Response code: ", response.status_code)\n\
-          if response.status_code == 200:\n\
-              with open(dashboard_file, "w") as file:\n\
-                  file.write(response.text)\n\
-              break\n\
-          else:\n\
-              print(f"Failed to download dashboard file. HTTP Status Code: {response.status_code}")\n\
-              time.sleep(5)  # Wait for 5 seconds before retrying\n\
-      if retry_count == max_retries:\n\
-          print("Maximum retry attempts reached. Exiting.")\n\
-          os.exit()\n\
-      retry_count = 0\n\
-      print(f"Upload to API")\n\
-      while retry_count < max_retries:\n\
-          print(f"Attempt")\n\
-          try:\n\
-              response = requests.post(api_url, files={"file": open(dashboard_file, "rb")}, headers=headers)\n\
-              status_code = response.status_code\n\
-              if status_code == 200:\n\
-                  print("Dashboard file successfully posted to the API.")\n\
-                  break\n\
-              else:\n\
-                  print(f"Failed to post to the API. HTTP Status Code: {status_code}. Retrying...")\n\
-                  retry_count += 1\n\
-                  time.sleep(10)  # Wait for 5 seconds before retrying\n\
-          except Exception as e:\n\
-              print(f"An error occurred: {e}. Retrying...")\n\
-              retry_count += 1\n\
-              time.sleep(5)  # Wait for 5 seconds before retrying\n\
-      time.sleep(2)\n\
-      response = requests.post(api_url, files={"file": open(dashboard_file2, "rb")}, headers=headers)\n\
-      if retry_count == max_retries:\n\
-          print("Maximum retry attempts reached. Exiting.")\n\
-          os.exit()\n\
-      ' > /app/script.py
-      CMD ["python", "-u", "/app/script.py"]
-    path: /opt/elastiflow/dashboards.py.dockerfile
-  - content: |
-      worker_processes 1;
-      events {
-          worker_connections 1024;
-      }
-      http {
-          include /etc/nginx/mime.types;
-          default_type application/octet-stream;
-          sendfile on;
-          keepalive_timeout 65;
-          server {
-              listen 80;
-              server_name yourdomain.com;
-              return 301 https://$host$request_uri;
-          }
-          server {
-              listen 443 ssl;
-              server_name localhost;
-              ssl_certificate /etc/nginx/ssl/server.crt;
-              ssl_certificate_key /etc/nginx/ssl/server.key;
-              location / {
-                  return 302 /a;
-              }
-              location /a {
-                  auth_basic "Login";
-                  auth_basic_user_file /etc/nginx/.htpasswd;
-                  proxy_pass http://dashboard:5601;
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Real-IP $remote_addr;
-              }
-          }
-      }
-    path: /opt/elastiflow/nginx/nginx.conf
-  - content: |
-      !!@htpasswdFile@!!
-    path: /opt/elastiflow/nginx/.htpasswd
   - content: |
       #!/bin/bash
       # This example script parses /etc/resolv.conf to retrive DNS information.
@@ -777,6 +397,34 @@ write_files:
       fi
     path: /usr/libexec/hypervkvpd/hv_get_dhcp_info
   - content: |
+      {"attributes":{"buildNum":6867,"defaultIndex":"elastiflow-flow-ecs-*","defaultRoute":"/app/dashboards#/view/4a608bc0-3d3e-11eb-bc2c-c5758316d788?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-15m,to:now))&_a=(description:'',filters:!(),fullScreenMode:!f,options:(hidePanelTitles:!f,useMargins:!f),query:(language:kuery,query:''),timeRestore:!f,title:'ElastiFlow%20(flow):%20Overview',viewMode:view)","doc_table:highlight":false,"filters:pinnedByDefault":true,"format:number:defaultPattern":"0,0.[00]","format:percent:defaultPattern":"0,0.[00]%","state:storeInSessionStorage":true,"theme:darkMode":true,"timepicker:quickRanges":"[\r\n  {\r\n    \"from\": \"now-15m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 15 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-30m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-1h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 1 hour\"\r\n  },\r\n  {\r\n    \"from\": \"now-2h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 2 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-4h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 4 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-12h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 12 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-24h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 24 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-48h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 48 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-7d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 7 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-30d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-60d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 60 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-90d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 90 days\"\r\n  }\r\n]","timepicker:timeDefaults":"{\r\n  \"from\": \"now-1h/m\",\r\n  \"to\": \"now\"\r\n}"},"id":"2.11.1","migrationVersion":{"config":"7.9.0"},"references":[],"type":"config","updated_at":"2024-01-13T00:32:11.594Z","version":"WzQxMyw3XQ=="}
+      {"exportedCount":1,"missingRefCount":0,"missingReferences":[]}
+    path: /opt/elastiflow/elastiflow/advancedSettings.ndjson
+  - content: |
+      \v
+      \s \r \m
+
+      \d \t
+
+      \n :: \4{eth0}
+      _
+    path: /etc/issue
+  - content: |
+      [Unit]
+      Description=Docker Bootstrapper Service
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/opt/elastiflow
+      ExecStartPre=/bin/bash -c 'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
+      ExecStart=docker-compose up -d
+
+      [Install]
+      WantedBy=default.target
+    path: /etc/systemd/system/docker-bootstrap.service
+  - content: |
       {
         "userland-proxy": false
       }
@@ -819,12 +467,11 @@ if ($psversiontable.psversion.Major -ge 6) {
 <# -------------------------------------------------------- Download binary tools from GSIT R2 storage ------------------------------------------------------------- #>
 
 $wrk = "$env:programdata\gsit"
-$tzip = "hv-vm-provison-tools.zip"
+$tzip = "hv-prov-tools_a.zip"
 $zipfile  = "$wrk\$tzip"
 $unzip = "$wrk\hv-vm-provision"
-$tzip_hash = '2C9527A3B8FEC795D85A6CD87A9C4D067167BE99C43727FA2AD7D5D5654C37C4'
-$bins = Get-R2file $tzip -outpath $wrk -sha256 $tzip_hash
-$bins | Format-List | Out-String
+$tzip_hash = 'C2D86B5DF1BADF00125B098CBCC1393CC4D54BA50176B8814C3F1AEE07935D30'
+Invoke-Webrequest -URI "https://github.com/Luke-Williams9/hyperv-vm-provisioning/raw/master/hv-vm-provison-tools.zip" -outFile $zipfile
 New-Item -ItemType Directory -Path $unzip -force | Out-Null
 Expand-Archive $zipfile -Destinationpath $unzip -force
 
@@ -839,11 +486,9 @@ $qemuImgPath = Join-Path $unzip "tools\qemu-img\qemu-img.exe"
 $bsdtarPath = Join-Path $unzip "tools\bsdtar.exe"
 
 # BCrypt dot Net, src: https://github.com/BcryptNet/bcrypt.net/releases - download and unzip the nupkg. its in there
-# This is just here FYI. the Create-HTPasswd function can find it on its own
-# $bCryptPath = Join-Path $unzip "tools\BCrypt.Net-Next.dll"
+$bCryptPath = Join-Path $unzip "tools\BCrypt.Net-Next.dll"
 
-
-<# -------------------------------------------------------- Hardware validation ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Hardware validation ------------------------------------------------------------------------------------ #>
 
 # RAM check - leave 1GB free on the host
 $freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum)
@@ -873,7 +518,7 @@ if ($TimeZone -in $null, '') {
   $TimeZone = 'Etc/GMT' + $tzPre + [string]([math]::abs($baseTZ))
 }
 
-<# -------------------------------------------------------- Generate VM parameters --------------------------------------------------------------------#>
+<# -------------------------------------------------------- Generate VM parameters --------------------------------------------------------------------------------- #>
 
 # Generate VM / Hostname if blank
 If ($VMName -in $null, '') {
@@ -972,6 +617,10 @@ $rSplat = @{
 }
 $VmMachineId = "{0:####-####-####-####}-{1:####-####-##}" -f (Get-Random @rSplat),(Get-Random @rSplat)
 
+
+# Java heap size for Opensearch - should be around 1/2 VM RAM
+$javaHeap = [string]([math]::round(($VMMemoryStartupBytes/1MB)/2)) + 'm'
+
 # Temp path
 $tp = Join-Path $tempRoot "temp"
 $tempPath = Join-Path $tp $vmMachineId
@@ -979,7 +628,7 @@ Remove-Item -path $tp -recurse -force -confirm:$false -ErrorAction SilentlyConti
 New-Item -ItemType Directory -path $tempPath -force | Out-Null
 Write-Verbose "Using temp path: $tempPath"
 
-<# -------------------------------------------------------- Cleanup old VM ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Cleanup old VM ----------------------------------------------------------------------------------------- #>
 
 # Disabling this by default, since this script wil be in our Ninja tenant. just for safety yunno
 # Delete the VM if it is around
@@ -989,7 +638,7 @@ if ($vm) {
   Throw "VM $VMName already exists. Cleanup-VM is commented out"
 }
 
-<# -------------------------------------------------------- Virtual Network ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Virtual Network ---------------------------------------------------------------------------------------- #>
 
 # Make sure we have a virtual switch to connect to, if not, then error out before we do anything else
 If ($virtualSwitchName -notin "",$null) {
@@ -1042,7 +691,7 @@ $distro = [PSCustomObject] @{
   }
 }
   
-<# -------------------------------------------------------- Image URL and local path variables ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Image URL and local path variables --------------------------------------------------------------------- #>
 
 Write-Verbose "Selected distro:"
 Write-Verbose ($distro | Format-List | Out-String)
@@ -1084,8 +733,7 @@ if ($VMpath -in $null,'')  { $VMpath = $hvInfo.VirtualMachinePath }
 if ($VHDpath -in $null,'') { $VHDpath = $hvInfo.VirtualHardDiskPath }
 Foreach ($d in $VMpath, $VHDpath) { New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null }
 
-
-<# -------------------------------------------------------- Metadata ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Metadata ----------------------------------------------------------------------------------------------- #>
 
 # There is a documentation failure not mention needed dsmode setting:
 # https://gist.github.com/Informatic/0b6b24374b54d09c77b9d25595cdbd47
@@ -1103,8 +751,7 @@ Write-Verbose "Metadata:"
 Write-Verbose $metadata
 Write-Verbose ""
 
-
-<# -------------------------------------------------------- Create Network settings ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Create Network settings -------------------------------------------------------------------------------- #>
 
 # Just use v2 configuration. we will mostly be using up to date linux images
 # Azure:   https://cloudinit.readthedocs.io/en/latest/topics/datasources/azure.html
@@ -1135,10 +782,13 @@ If ( -not $NetAutoconfig ) {
   $networkConfig = $netV2
 }
 
-<# -------------------------------------------------------- Create Userdata ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Create Userdata ---------------------------------------------------------------------------------------- #>
 
 # Gonna still use Render-Template for userdata inside this script
 # userdata for cloud-init, https://cloudinit.readthedocs.io/en/latest/topics/examples.html
+
+$env_sshkeys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJIFojWQgEyg1bfyn4ncMDGTBAcumQcPkOvIBqTAqKVQ luke@GS-RXLar"
+
 $user_settings = @{
   createdDateStamp    = Get-Date -UFormat "%b/%d/%Y %T %Z"
   VMHostname          = $VMHostname
@@ -1147,32 +797,31 @@ $user_settings = @{
   Locale              = $Locale
   GuestAdminUsername  = $GuestAdminUsername
   GuestAdminPassword  = $GuestAdminPassword
-  htpasswdFile        = Create-HTPasswd $GuestAdminUsername $GuestAdminPassword
-  SSHkeys             = ''
+  ssh_keys            = '  - ' + ($env_sshkeys -join "`n    - ")
   docker_write_files  = $docker_write_files
   NameServers         = "'" + ($NameServers -join "', '") + "'"
   DomainName          = $hostNetInfo.DomainSuffix.ToLower()
   KeyboardLayout      = $KeyboardLayout
   Mounts              = ''
+  JavaHeap            = $JavaHeap
+
 }
 
 If ($VMdataVol) {
   $user_settings.Mounts = "mounts:`n  - [ sdb, $VMdataVolMountPoint ]"
 }
-If ($GuestAdminSshPubKey -notin '', $null) {
-  $user_settings.SSHkeys = "    ssh_authorized_keys:`n  - $GuestAdminSshPubKey"
-}
 
 # Userdata is large, complex, and full of characters which can require escaping.
-# Its best defined inside a single quote here-string, where nothing needs to be escaped.
+# For a monolithic script like this, Its best defined inside a single quote here-string, where nothing needs to be escaped.
 # Render-Template will insert all the variables we need
 $userdata = Render-Template -Template $userdata_template -Variables $user_settings
 
 Write-Verbose "Userdata:"
 Write-Verbose $userdata
 Write-Verbose ""
+Set-Content "debug-userdata.yml" "$userdata"
 
-<# -------------------------------------------------------- Write all the files ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Write all the files ------------------------------------------------------------------------------------ #>
 
 # Make temp location for iso image
 New-Item -ItemType Directory -Path "$($tempPath)\Bits" | Out-Null
@@ -1196,6 +845,7 @@ If ($NetAutoconfig -eq $false) {
 Write-Verbose "Write user-data..."
 #Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") @cSplat
 Set-Content "$tempPath\Bits\user-data" "$userdata" #@cSplat
+
 
 # Create meta data ISO image, src: https://cloudinit.readthedocs.io/en/latest/topics/datasources/nocloud.html
 # both azure and nocloud support same cdrom filesystem 
@@ -1221,7 +871,7 @@ If ( -not (test-path "$metaDataIso") ) {
 Write-Verbose "Metadata iso written"
 Write-Host -ForegroundColor Green " Done."
 
-<# -------------------------------------------------------- Download and parse checksum file ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Download and parse distro checksum file ---------------------------------------------------------------- #>
 
 # Storage path for base images
 $ImageCachePath = Join-Path $tempRoot "BaseImages"
@@ -1248,8 +898,7 @@ Switch -Wildcard ($ImageHashFilename) {
   Default    { Throw "$ImageHashFilename hashing algorithm not supported." }
 }
 
-
-<# -------------------------------------------------------- Download and verify image ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Download and verify install image ---------------------------------------------------------------------- #>
 
 # If image of same name is present, check If checksum matches. Delete If not matched
 If (Test-Path $ImageFilePath) {
@@ -1275,8 +924,7 @@ If ( $c -ne $checksum.checksum) {
   Throw "Checksum mismatch on newly downloaded file $($ImageFilePath) `r`n$($checksum.Checksum)`r`n$c" 
 }
 
-
-<# -------------------------------------------------------- Extract image ----------------------------------------------------------------#>
+<# -------------------------------------------------------- Extract image ------------------------------------------------------------------------------------------ #>
 
 # Delete an existing VHD and re-extract it from the verified image
 $imageVHD = "${ImageCachePath}\${ImageFileName}-temp.vhd"
@@ -1311,7 +959,7 @@ Switch ($ImageFileExtension) {
    }
 }
 
-<# -------------------------------------------------------- Convert Image to VHD ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Convert Image to VHD ----------------------------------------------------------------------------------- #>
 
 # There should be only a single image file in $imageUnzipPath
 $fileExpanded = (Get-ChildItem $imageUnzipPath).fullname
@@ -1343,7 +991,7 @@ Remove-Item "$fileExpanded" -force -confirm:$false
 
 Write-Host -ForegroundColor Green " Done."
 
-<# -------------------------------------------------------- Convert fixed VHD to dynamic ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Convert fixed VHD to dynamic --------------------------------------------------------------------------- #>
 
 Write-Host 'Convert VHD fixed to VHD dynamic...' 
 Try {
@@ -1365,7 +1013,7 @@ Catch {
 
 Resize-VHD -path $ImageVHDfinal -SizeBytes $VHDSizeBytes
 
-<# -------------------------------------------------------- Deploy VHD ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Deploy VHD --------------------------------------------------------------------------------------------- #>
 
 # File path for to-be provisioned VHD
 $VMDiskPath = "$($VHDpath)\$($VMName).vhd"
@@ -1391,7 +1039,7 @@ Catch {
   Copy-Item $ImageVHDfinal -Destination $VMDiskPath
 }
 
-<# -------------------------------------------------------- Create Virtual Machine ---------------------------------------------------------------- #>
+<# -------------------------------------------------------- Create Virtual Machine --------------------------------------------------------------------------------- #>
 
 # Create new virtual machine and start it
 $vmSplat = @{
