@@ -1,0 +1,149 @@
+#cloud-config
+# vim: syntax=yaml
+# created: !!@createdDateStamp@!!
+# values surrounded by !!@ @!! need to be replaced by powershell variables of the same name
+
+hostname: !!@VMHostname@!!
+fqdn: !!@FQDN@!!
+# cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
+# /etc/defaults/locale set and results into error
+#locale: $Locale
+timezone: !!@TimeZone@!!
+
+growpart:
+  mode: auto
+  devices: [/]
+  ignore_growroot_disabled: false
+
+preserve_sources_list: true
+package_update: true
+package_upgrade: true
+package_reboot_if_required: true
+
+packages:
+  - eject
+  - console-setup
+  - keyboard-configuration
+  - docker.io
+  - docker-compose
+!!@packages@!!
+
+# https://learn.microsoft.com/en-us/azure/virtual-machines/linux/cloudinit-add-user#add-a-user-to-a-vm-with-cloud-init
+
+users:
+  - default
+  - name: !!@GuestAdminUsername@!!
+    no_user_group: true
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    plain_text_passwd: !!@GuestAdminPassword@!!
+    lock_passwd: false
+    !!@SSHkeys@!!
+    # SSHkeys can be either null or rendered yaml like below:
+    # ssh_authorized_keys:
+    # - <GuestAdminSshPubKey>
+
+disable_root: true    # true: notify default user account / false: allow root ssh login
+ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
+
+#ssh_authorized_keys:
+#  - ssh-rsa AAAAB... comment
+
+# bootcmd can be setup like runcmd but would run at very early stage
+# on every cloud-init assisted boot if not prepended by command "cloud-init-per once|instance|always":
+
+
+!!@bootcmd@!!
+runcmd:
+  # remove metadata iso
+  - [ sh, -c, "if test -b /dev/cdrom; then eject; fi" ]
+  - [ sh, -c, "if test -b /dev/sr0; then eject /dev/sr0; fi" ]
+  # !!@azureWAagentDisable@!!
+  # disable cloud init on next boot (https://cloudinit.readthedocs.io/en/latest/topics/boot.html, https://askubuntu.com/a/1047618)
+  - [ sh, -c, touch /etc/cloud/cloud-init.disabled ]
+  - 'echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf sudo sysctl -p'
+  # set locale
+  # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
+  # /etc/defaults/locale set and results into error
+  - [ locale-gen, "!!@Locale@!!" ]
+  - [ update-locale, "!!@Locale@!!" ]
+  - [ rm, -f, /etc/netplan/*.yaml ]
+  - [ netplan, apply ]
+  # - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
+!!@AdditionalRuncmd@!!
+
+write_files:
+  # hyperv-daemons package in mosts distros is missing this file and spamming syslog:
+  # https://github.com/torvalds/linux/blob/master/tools/hv/hv_get_dns_info.sh
+  - content: |
+      #!/bin/bash
+      # This example script parses /etc/resolv.conf to retrive DNS information.
+      # In the interest of keeping the KVP daemon code free of distro specific
+      # information; the kvp daemon code invokes this external script to gather
+      # DNS information.
+      # This script is expected to print the nameserver values to stdout.
+      # Each Distro is expected to implement this script in a distro specific
+      # fashion. For instance on Distros that ship with Network Manager enabled,
+      # this script can be based on the Network Manager APIs for retrieving DNS
+      # entries.
+      cat /etc/resolv.conf 2>/dev/null | awk '/^nameserver/ { print $2 }'
+    path: /usr/libexec/hypervkvpd/hv_get_dns_info
+  # hyperv-daemons package in mosts distros is missing this file and spamming syslog:
+  # https://github.com/torvalds/linux/blob/master/tools/hv/hv_get_dhcp_info.sh
+  - content: |
+      #!/bin/bash
+      # SPDX-License-Identifier: GPL-2.0
+      # This example script retrieves the DHCP state of a given interface.
+      # In the interest of keeping the KVP daemon code free of distro specific
+      # information; the kvp daemon code invokes this external script to gather
+      # DHCP setting for the specific interface.
+      #
+      # Input: Name of the interface
+      #
+      # Output: The script prints the string "Enabled" to stdout to indicate
+      #	that DHCP is enabled on the interface. If DHCP is not enabled,
+      #	the script prints the string "Disabled" to stdout.
+      #
+      # Each Distro is expected to implement this script in a distro specific
+      # fashion. For instance, on Distros that ship with Network Manager enabled,
+      # this script can be based on the Network Manager APIs for retrieving DHCP
+      # information.
+      # RedHat based systems
+      #if_file="/etc/sysconfig/network-scripts/ifcfg-"$1
+      # Debian based systems
+      if_file=`"/etc/network/interrfaces.d/*`"
+      dhcp=`$(grep `"dhcp`" `$if_file 2>/dev/null)
+      if [ "$dhcp" != "" ];
+      then
+      echo "Enabled"
+      else
+      echo "Disabled"
+      fi
+    path: /usr/libexec/hypervkvpd/hv_get_dhcp_info
+  - content: |
+      {
+        "userland-proxy": false
+      }
+    path: /etc/docker/daemon.json
+!!@network_write_files@!!
+
+mount_default_fields: [ None, None, "auto", "defaults,nofail", "0", "2" ]
+!!@mounts@!!
+
+# Additional mounts not  finished yet. Need to add formatting / partitioning, and configure for docker
+
+manage_etc_hosts: true
+manage_resolv_conf: true
+
+resolv_conf:
+  nameservers: [!!@NameServers@!!]
+  searchdomains:
+    - !!@DomainName@!!
+  domain: !!@DomainName@!!
+
+power_state:
+  mode: !!@CloudInitPowerState@!!
+  message: Provisioning finished, will !!@CloudInitPowerState@!! ...
+  timeout: 15

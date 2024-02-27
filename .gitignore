@@ -3,3 +3,4 @@ local
 *.log
 scratch.txt
 env.ps1
+*.zip

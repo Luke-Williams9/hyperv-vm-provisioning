@@ -506,6 +506,16 @@ write_files:
       fi
     path: /usr/libexec/hypervkvpd/hv_get_dhcp_info
   - content: |
+      \v
+      \s \r \m
+
+      \d \t
+
+      \n.\o
+      \4{eth0}
+
+    path: /etc/issue
+  - content: |
       {
         "userland-proxy": false
       }

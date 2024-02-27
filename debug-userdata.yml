@@ -1,14 +1,16 @@
 #cloud-config
 # vim: syntax=yaml
-# created: !!@createdDateStamp@!!
+# created: Jan/18/2024 14:04:23 -08
 # values surrounded by !!@ @!! need to be replaced by powershell variables of the same name
 
-hostname: !!@VMHostname@!!
-fqdn: !!@FQDN@!!
+hostname: eflow10
+fqdn: eflow10.home.lan
+# prefer_fqdn_over_hostname: true
+
 # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
 # /etc/defaults/locale set and results into error
 #locale: $Locale
-timezone: !!@TimeZone@!!
+timezone: Etc/GMT+8
 
 growpart:
   mode: auto
@@ -34,16 +36,16 @@ packages:
 
 users:
   - default
-  - name: !!@GuestAdminUsername@!!
+  - name: luke
     no_user_group: true
     groups: [sudo]
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: false
-    plain_text_passwd: !!@GuestAdminPassword@!!
+    plain_text_passwd: derp77
     lock_passwd: false
     ssh_authorized_keys:
-    !!@ssh_keys@!!
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJIFojWQgEyg1bfyn4ncMDGTBAcumQcPkOvIBqTAqKVQ luke@GS-RXLar
 
 disable_root: true    # true: notify default user account / false: allow root ssh login
 ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
@@ -62,9 +64,12 @@ runcmd:
   # set locale
   # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
   # /etc/defaults/locale set and results into error
-  - 'locale-gen "!!@Locale@!!"'
-  - 'update-locale "!!@Locale@!!"'
-  - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
+  - 'locale-gen "en_US.UTF-8"'
+  - 'update-locale "en_US.UTF-8"'
+  # - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
+  # Start elastiflow only after cloud-init is complete
+  - 'systemctl enable docker-bootstrap.service'
+  - 'systemctl start docker-bootstrap.service'
 write_files:
   - content: |
       version: '3'
@@ -108,8 +113,8 @@ write_files:
             - discovery.type=single-node
             - bootstrap.memory_lock=true
             - "OPENSEARCH_JAVA_OPTS=-Xms1024m -Xmx1024m" # Set min and max JVM heap sizes to at least 50% of system RAM
-            - "DISABLE_INSTALL_DEMO_CONFIG=true" # Prevents execution of bundled demo script which installs demo certificates and security configurations to OpenSearch
-            - "DISABLE_SECURITY_PLUGIN=true" # Disables Security plugin
+            - "DISABLE_INSTALL_DEMO_CONFIG=true"
+            - "DISABLE_SECURITY_PLUGIN=true"
           ulimits:
             memlock:
               soft: -1 # Set memlock to unlimited (no soft or hard limit)
@@ -127,7 +132,7 @@ write_files:
         dashboard:
           image: opensearchproject/opensearch-dashboards:latest
           ports:
-            - 127.0.0.1:5601:5601 # Map host port 5601 to container port 5601
+            - 127.0.0.1:5601:5601
           expose:
             - "5601" # Expose port 5601 for web access to OpenSearch Dashboards
           environment:
@@ -183,8 +188,8 @@ write_files:
           image: ghcr.io/maxmind/geoipupdate
           restart: unless-stopped
           environment:
-            - 'GEOIPUPDATE_ACCOUNT_ID=!!@MaxmindID@!!'
-            - 'GEOIPUPDATE_LICENSE_KEY=!!@MaxmindKey@!!'
+            - 'GEOIPUPDATE_ACCOUNT_ID=154796'
+            - 'GEOIPUPDATE_LICENSE_KEY=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'
             - 'GEOIPUPDATE_EDITION_IDS=GeoLite2-ASN GeoLite2-City GeoLite2-Country'
             - GEOIPUPDATE_FREQUENCY=72
           networks:
@@ -310,7 +315,7 @@ write_files:
       }
     path: /opt/elastiflow/nginx/nginx.conf
   - content: |
-      !!@htpasswdFile@!!
+      luke:$2a$11$QR/9tBlB3ksIPN7VvoMg4OhC857IhFG5z7ILm2wlIPg9pmHjHbsyy
     path: /opt/elastiflow/nginx/.htpasswd
   - content: |
       #!/bin/bash
@@ -356,22 +361,40 @@ write_files:
       fi
     path: /usr/libexec/hypervkvpd/hv_get_dhcp_info
   - content: |
-      {
-        "userland-proxy": false
-      }
-    path: /etc/docker/daemon.json
+      {"attributes":{"buildNum":6867,"defaultIndex":"elastiflow-flow-ecs-*","defaultRoute":"/app/dashboards#/view/4a608bc0-3d3e-11eb-bc2c-c5758316d788?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-15m,to:now))&_a=(description:'',filters:!(),fullScreenMode:!f,options:(hidePanelTitles:!f,useMargins:!f),query:(language:kuery,query:''),timeRestore:!f,title:'ElastiFlow%20(flow):%20Overview',viewMode:view)","doc_table:highlight":false,"filters:pinnedByDefault":true,"format:number:defaultPattern":"0,0.[00]","format:percent:defaultPattern":"0,0.[00]%","state:storeInSessionStorage":true,"theme:darkMode":true,"timepicker:quickRanges":"[\r\n  {\r\n    \"from\": \"now-15m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 15 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-30m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-1h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 1 hour\"\r\n  },\r\n  {\r\n    \"from\": \"now-2h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 2 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-4h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 4 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-12h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 12 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-24h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 24 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-48h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 48 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-7d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 7 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-30d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-60d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 60 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-90d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 90 days\"\r\n  }\r\n]","timepicker:timeDefaults":"{\r\n  \"from\": \"now-1h/m\",\r\n  \"to\": \"now\"\r\n}"},"id":"2.11.1","migrationVersion":{"config":"7.9.0"},"references":[],"type":"config","updated_at":"2024-01-13T00:32:11.594Z","version":"WzQxMyw3XQ=="}
+      {"exportedCount":1,"missingRefCount":0,"missingReferences":[]}
+    path: /opt/elastiflow/elastiflow/advancedSettings.ndjson
   - content: |
       \v
       \s \r \m
 
       \d \t
 
-      \n.\o
-      \4{eth0}
-
+      \n :: \4{eth0}
+      _
     path: /etc/issue
+  - content: |
+      [Unit]
+      Description=Docker Bootstrapper Service
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/opt/elastiflow
+      ExecStartPre=/bin/bash -c 'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
+      ExecStart=docker-compose up -d
+
+      [Install]
+      WantedBy=default.target
+    path: /etc/systemd/system/docker-bootstrap.service
+  - content: |
+      {
+        "userland-proxy": false
+      }
+    path: /etc/docker/daemon.json
 mount_default_fields: [ None, None, "auto", "defaults,nofail", "0", "2" ]
-!!@mounts@!!
+# 
 
 # Additional mounts not  finished yet. Need to add formatting / partitioning, and configure for docker
 
@@ -379,10 +402,10 @@ manage_etc_hosts: true
 manage_resolv_conf: true
 
 resolv_conf:
-  nameservers: [!!@NameServers@!!]
+  nameservers: ['10.2.2.1']
   searchdomains:
-    - !!@DomainName@!!
-  domain: !!@DomainName@!!
+    - home.lan
+  domain: home.lan
 
 power_state:
   mode: reboot
