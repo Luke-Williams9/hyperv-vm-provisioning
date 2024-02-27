@@ -26,17 +26,11 @@
   - https://www.altaro.com/hyper-v/powershell-script-change-advanced-settings-hyper-v-virtual-machines/
 
 
-  Should install nuget and use it to install the bcrypt package. that will solve any .net version issues we may run into
-  
   The .htpasswd generator works! guestadminuser/password will be set as the web basic auth login as well
-  Just get nuget, its a single .exe download. then you can install the entire bcrypt nupkg. this could be a separate script to run on everything
-
-  After 1st test client deployment, we will need to work on
-    DNS - use CoreDNS, set it up to query the local DC for internal IPs, and external DNS / the firewall for external things
-    basic HTTP protections on nginx - login fail limits, fail2ban, etc
-  Oh and also setting up a 2nd volume...
-
-  the pre-login (/etc/issue) screen should display the netflow port and such. Make the bootstrap script also write a /etc/issue file with updated info
+  
+  This script needs 2 more things:
+    - make the advanced settings import work
+    - find a good clean way to launch docker-compose up once cloud-init is complete
 
 #>
 
@@ -74,9 +68,9 @@ param (
   [int]    $VMGeneration = 1, # create gen1 hyper-v machine because of portability to Azure (https://docs.microsoft.com/en-us/azure/virtual-machines/windows/prepare-for-upload-vhd-image)
   [Parameter()][Alias("CPU","CPUcores","Cores")]
   [int]    $VMProcessorCount = 4,
+  [bool]   $VMDynamicMemoryEnabled = $false,
   [Parameter()][Alias("RAM","Memory")]
   [uint64] $VMMemoryStartupBytes = 4096MB,
-  [bool]   $VMDynamicMemoryEnabled = $false,
   [uint64] $VMMinimumBytes = $VMMemoryStartupBytes,
   [uint64] $VMMaximumBytes = $VMMemoryStartupBytes,
   [uint64] $VHDSizeBytes = 16GB,
@@ -95,7 +89,7 @@ param (
   [switch] $VMPassthru = $false,
   [switch] $VMMacAddressSpoofing = $false,
   [switch] $VMExposeVirtualizationExtensions = $false,
-  [string] $VMVersion = "9", # This failed on GS-RD430 (Get-VMHostSupportedVersion | Where-Object IsDefault).Version,
+  [string] $VMVersion = (Get-VMHostSupportedVersion | Where-Object IsDefault).Version,
   [Parameter()][Alias("hostname")]
   [string] $VMHostname,
   [string] $VMpath, # if not defined here default Virtal Machine path is used
@@ -120,7 +114,7 @@ $ErrorActionPreference = 'Stop'
       if ( (-not $username) -or (-not $password) ) {
           Throw "username and password must be specified"
       }
-      Add-Type -Path $bCryptPath
+      Add-Type -Path ($PWD.path + '\tools\BCrypt.Net-Next.dll')
       $salt = [bcrypt.net.bcrypt]::generatesalt()
       $hashedpass = [bcrypt.net.bcrypt]::hashpassword($password, $Salt)
 
@@ -428,8 +422,6 @@ $userdata_template = @'
 
 hostname: !!@VMHostname@!!
 fqdn: !!@FQDN@!!
-# prefer_fqdn_over_hostname: true
-
 # cloud-init Bug 21.4.1: locale update prepends "LANG=" like in
 # /etc/defaults/locale set and results into error
 #locale: $Locale
@@ -468,7 +460,7 @@ users:
     plain_text_passwd: !!@GuestAdminPassword@!!
     lock_passwd: false
     ssh_authorized_keys:
-    !!@ssh_keys@!!
+      !!@ssh_keys@!!
 
 disable_root: true    # true: notify default user account / false: allow root ssh login
 ssh_pwauth: true      # true: allow login with password; else only with setup pubkey(s)
@@ -489,10 +481,7 @@ runcmd:
   # /etc/defaults/locale set and results into error
   - 'locale-gen "!!@Locale@!!"'
   - 'update-locale "!!@Locale@!!"'
-  # - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
-  # Start elastiflow only after cloud-init is complete
-  - 'systemctl enable docker-bootstrap.service'
-  - 'systemctl start docker-bootstrap.service'
+  - 'docker-compose -f /opt/elastiflow/docker-compose.yml up -d'
 write_files:
   - content: |
       version: '3'
@@ -535,9 +524,9 @@ write_files:
             - node.name=os1
             - discovery.type=single-node
             - bootstrap.memory_lock=true
-            - "OPENSEARCH_JAVA_OPTS=-Xms!!@JavaHeap@!! -Xmx!!@JavaHeap@!!" # Set min and max JVM heap sizes to at least 50% of system RAM
-            - "DISABLE_INSTALL_DEMO_CONFIG=true"
-            - "DISABLE_SECURITY_PLUGIN=true"
+            - "OPENSEARCH_JAVA_OPTS=-Xms1024m -Xmx1024m" # Set min and max JVM heap sizes to at least 50% of system RAM
+            - "DISABLE_INSTALL_DEMO_CONFIG=true" # Prevents execution of bundled demo script which installs demo certificates and security configurations to OpenSearch
+            - "DISABLE_SECURITY_PLUGIN=true" # Disables Security plugin
           ulimits:
             memlock:
               soft: -1 # Set memlock to unlimited (no soft or hard limit)
@@ -555,7 +544,7 @@ write_files:
         dashboard:
           image: opensearchproject/opensearch-dashboards:latest
           ports:
-            - 127.0.0.1:5601:5601
+            - 127.0.0.1:5601:5601 # Map host port 5601 to container port 5601
           expose:
             - "5601" # Expose port 5601 for web access to OpenSearch Dashboards
           environment:
@@ -784,34 +773,6 @@ write_files:
       fi
     path: /usr/libexec/hypervkvpd/hv_get_dhcp_info
   - content: |
-      {"attributes":{"buildNum":6867,"defaultIndex":"elastiflow-flow-ecs-*","defaultRoute":"/app/dashboards#/view/4a608bc0-3d3e-11eb-bc2c-c5758316d788?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:now-15m,to:now))&_a=(description:'',filters:!(),fullScreenMode:!f,options:(hidePanelTitles:!f,useMargins:!f),query:(language:kuery,query:''),timeRestore:!f,title:'ElastiFlow%20(flow):%20Overview',viewMode:view)","doc_table:highlight":false,"filters:pinnedByDefault":true,"format:number:defaultPattern":"0,0.[00]","format:percent:defaultPattern":"0,0.[00]%","state:storeInSessionStorage":true,"theme:darkMode":true,"timepicker:quickRanges":"[\r\n  {\r\n    \"from\": \"now-15m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 15 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-30m/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 minutes\"\r\n  },\r\n  {\r\n    \"from\": \"now-1h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 1 hour\"\r\n  },\r\n  {\r\n    \"from\": \"now-2h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 2 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-4h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 4 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-12h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 12 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-24h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 24 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-48h/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 48 hours\"\r\n  },\r\n  {\r\n    \"from\": \"now-7d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 7 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-30d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 30 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-60d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 60 days\"\r\n  },\r\n  {\r\n    \"from\": \"now-90d/m\",\r\n    \"to\": \"now/m\",\r\n    \"display\": \"Last 90 days\"\r\n  }\r\n]","timepicker:timeDefaults":"{\r\n  \"from\": \"now-1h/m\",\r\n  \"to\": \"now\"\r\n}"},"id":"2.11.1","migrationVersion":{"config":"7.9.0"},"references":[],"type":"config","updated_at":"2024-01-13T00:32:11.594Z","version":"WzQxMyw3XQ=="}
-      {"exportedCount":1,"missingRefCount":0,"missingReferences":[]}
-    path: /opt/elastiflow/elastiflow/advancedSettings.ndjson
-  - content: |
-      \v
-      \s \r \m
-
-      \d \t
-
-      \n :: \4{eth0}
-      _
-    path: /etc/issue
-  - content: |
-      [Unit]
-      Description=Docker Bootstrapper Service
-      After=network.target
-
-      [Service]
-      Type=simple
-      User=root
-      WorkingDirectory=/opt/elastiflow
-      ExecStartPre=/bin/bash -c 'while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done'
-      ExecStart=docker-compose up -d
-
-      [Install]
-      WantedBy=default.target
-    path: /etc/systemd/system/docker-bootstrap.service
-  - content: |
       {
         "userland-proxy": false
       }
@@ -854,7 +815,7 @@ if ($psversiontable.psversion.Major -ge 6) {
 <# -------------------------------------------------------- Download binary tools from GSIT R2 storage ------------------------------------------------------------- #>
 
 $wrk = "$env:programdata\gsit"
-$tzip = "hv-prov-tools_a.zip"
+$tzip = "hv-vm-provison-tools.zip"
 $zipfile  = "$wrk\$tzip"
 $unzip = "$wrk\hv-vm-provision"
 $tzip_hash = '2C9527A3B8FEC795D85A6CD87A9C4D067167BE99C43727FA2AD7D5D5654C37C4'
@@ -874,7 +835,8 @@ $qemuImgPath = Join-Path $unzip "tools\qemu-img\qemu-img.exe"
 $bsdtarPath = Join-Path $unzip "tools\bsdtar.exe"
 
 # BCrypt dot Net, src: https://github.com/BcryptNet/bcrypt.net/releases - download and unzip the nupkg. its in there
-$bCryptPath = Join-Path $unzip "tools\BCrypt.Net-Next.dll"
+# This is just here FYI. the Create-HTPasswd function can find it on its own
+# $bCryptPath = Join-Path $unzip "tools\BCrypt.Net-Next.dll"
 
 
 <# -------------------------------------------------------- Hardware validation ----------------------------------------------------------------#>
@@ -1005,10 +967,6 @@ $rSplat = @{
   Maximum = 9999999999999999
 }
 $VmMachineId = "{0:####-####-####-####}-{1:####-####-##}" -f (Get-Random @rSplat),(Get-Random @rSplat)
-
-
-# Java heap size for Opensearch - should be around 1/2 VM RAM
-$javaHeap = [string]([math]::round(($VMMemoryStartupBytes/1MB)/2)) + 'm'
 
 # Temp path
 $tp = Join-Path $tempRoot "temp"
@@ -1177,10 +1135,6 @@ If ( -not $NetAutoconfig ) {
 
 # Gonna still use Render-Template for userdata inside this script
 # userdata for cloud-init, https://cloudinit.readthedocs.io/en/latest/topics/examples.html
-
-# Load sensitive info from env.ps1
-. .\env.ps1
-
 $user_settings = @{
   createdDateStamp    = Get-Date -UFormat "%b/%d/%Y %T %Z"
   VMHostname          = $VMHostname
@@ -1190,31 +1144,30 @@ $user_settings = @{
   GuestAdminUsername  = $GuestAdminUsername
   GuestAdminPassword  = $GuestAdminPassword
   htpasswdFile        = Create-HTPasswd $GuestAdminUsername $GuestAdminPassword
-  ssh_keys            = '  - ' + ($env_sshkeys -join "`n    - ")
+  SSHkeys             = ''
   docker_write_files  = $docker_write_files
   NameServers         = "'" + ($NameServers -join "', '") + "'"
   DomainName          = $hostNetInfo.DomainSuffix.ToLower()
   KeyboardLayout      = $KeyboardLayout
   Mounts              = ''
-  MaxmindID           = $env_MaxmindID
-  MaxmindKey          = $env_MaxmindKey
-  JavaHeap            = $JavaHeap
-
 }
 
 If ($VMdataVol) {
   $user_settings.Mounts = "mounts:`n  - [ sdb, $VMdataVolMountPoint ]"
 }
+If ($GuestAdminSshPubKey -notin '', $null) {
+  $user_settings.SSHkeys = "    ssh_authorized_keys:`n  - $GuestAdminSshPubKey"
+}
 
 # Userdata is large, complex, and full of characters which can require escaping.
-# For a monolithic script like this, Its best defined inside a single quote here-string, where nothing needs to be escaped.
+# Its best defined inside a single quote here-string, where nothing needs to be escaped.
 # Render-Template will insert all the variables we need
 $userdata = Render-Template -Template $userdata_template -Variables $user_settings
 
 Write-Verbose "Userdata:"
 Write-Verbose $userdata
 Write-Verbose ""
-Set-Content "debug-userdata.yml" "$userdata"
+
 <# -------------------------------------------------------- Write all the files ----------------------------------------------------------------#>
 
 # Make temp location for iso image
@@ -1239,7 +1192,6 @@ If ($NetAutoconfig -eq $false) {
 Write-Verbose "Write user-data..."
 #Set-Content "$($tempPath)\Bits\user-data" ([byte[]][char[]] "$userdata") @cSplat
 Set-Content "$tempPath\Bits\user-data" "$userdata" #@cSplat
-
 
 # Create meta data ISO image, src: https://cloudinit.readthedocs.io/en/latest/topics/datasources/nocloud.html
 # both azure and nocloud support same cdrom filesystem 
