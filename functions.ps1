@@ -457,6 +457,62 @@ Function Set-VMAdvancedSettings {
     #}  # uncomment this line and the first two lines to use as a profile or dot-sourced function
 }
 
+
+function Create-NetSettings {
+    param (
+      [parameter(position=0)][string]$IPaddress
+    )
+    if ( -not $IPaddress) {
+      Throw "IPaddress must be specified"
+    }
+    $r = @{} # Result
+    $nSplit = $IPAddress.split('/')
+    # Check if the IP address is valid
+    try {
+        $null = [System.Net.IPAddress]::Parse($nSplit[0])
+    }
+    catch {
+        Throw "Invalid IPv4 address $_"
+    }
+    Switch ($nSplit.count) {
+      {$_ -gt 2} {
+        Throw "IP CIDR not valid... $_"
+        Write-Error $_
+      }
+      {$_ -eq 2} {
+        $r.netMaskbits = $nSplit[1]
+        $subnetMaskBinary = ('1' * $nSplit[1]).PadRight(32, '0')
+        $subnetMaskParts = $subnetMaskBinary -split '(.{8})' | Where-Object { $_ }
+        $subnetMask = $subnetMaskParts | ForEach-Object { [convert]::ToInt32($_, 2) }
+        $r.NetNetmask = $subnetMask -join '.'
+      }
+      {$_ -eq 1} {
+        # Default to /24
+        $r.netMaskbits = '24'
+        $r.netNetmask = '255.255.255.0'
+      }
+    }
+    $r.netAddress = $nSplit[0]
+    $r.netGateway = $r.netAddress -replace '\.\d+$','.1'
+    return $r
+  } 
+  
+function ConvertTo-Bytes ($size) {
+    $sizes = @{
+        "B"  = 1
+        "KB" = 1KB
+        "MB" = 1MB
+        "GB" = 1GB
+        "TB" = 1TB
+    }
+
+    if ($size -match "(\d+(\.\d+)?)(B|KB|MB|GB|TB)") {
+        return [int64]([double]$matches[1] * $sizes[$matches[3]])
+    }
+    else {
+        throw "Invalid size"
+    }
+}
 # $freeRAMbytes = ((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum
 
 

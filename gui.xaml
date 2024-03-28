@@ -1,0 +1,118 @@
+<Window 
+    xmlns = "http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    Title = "Linux VM Creator"
+    SizeToContent="WidthAndHeight"
+    Background = "#FF2D2D30" Foreground="#FFFFFF">
+    <StackPanel>
+        <StackPanel.Resources>
+            <Style TargetType = "Label">
+                <Setter Property = "DockPanel.Dock" Value = "Left"/>
+                <Setter Property = "Foreground" Value = "#FFFFFF"/>
+                <Setter Property = "Width" Value = "150"/>
+            </Style>
+            <Style TargetType = "Control">
+                <Setter Property = "Foreground" Value = "#FFFFFF"/>
+            </Style>
+            <Style TargetType = "TextBox">
+                <Setter Property = "DockPanel.Dock" Value = "Right"/>
+                <Setter Property = "TextWrapping" Value = "Wrap"/>
+                <Setter Property = "Width" Value = "250"/>
+                <Setter Property =  "HorizontalAlignment" Value = "Right"/>
+            </Style>
+            <Style TargetType = "PasswordBox">
+                <Setter Property = "Width" Value = "250"/>
+            </Style>
+
+            <Style TargetType =  "DockPanel">
+                <Setter Property = "Margin" Value = "0,0,0,10"/>
+            </Style>
+            <Style TargetType = "Button">
+                <Setter Property = "Background" Value = "#FF3F3F3F"/>
+                <Setter Property = "Foreground" Value = "#FFFFFF"/>
+                <Setter Property = "BorderBrush" Value = "#FF3F3F3F"/>
+                <Setter Property = "BorderThickness" Value = "1"/>
+                <Setter Property = "Width" Value = "100"/>
+                <Setter Property = "Height" Value = "40"/>
+                <Setter Property = "Margin" Value = "20,0,20,0"/>
+                <Style.Triggers>
+                    <Trigger Property = "IsMouseOver" Value = "True">
+                        <Setter Property = "Background" Value = "#FF5F5F5F"/>
+                        <Setter Property = "Foreground" Value = "#FF111111"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType = "CheckBox">
+                <Setter Property = "Foreground" Value = "#FFFFFF"/>
+                <Setter Property = "Margin" Value = "5,5,5,5"/>
+            </Style>
+        </StackPanel.Resources>
+        <DockPanel Margin = "10">
+            <StackPanel Name =  "generalSettings" DockPanel.Dock = "Left">
+                <DockPanel>
+                    <Label Content = "VM Name"/>
+                    <TextBox Name = "VMName"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "Admin Username"/>
+                    <TextBox Name = "GuestAdminUsername"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "Admin Password"/>
+                     <TextBox Name="GuestAdminPassword"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "Admin SSH Public Key"/>
+                    <TextBox Name = "GuestAdminSshPubKey"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "Distro"/>
+                    <ComboBox Name = "imageOS"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "Version"/>
+                    <ComboBox Name = "version"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "Processor Count"/>
+                    <TextBox Name = "VMProcessorCount"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "VM Memory"/>
+                    <TextBox Name = "VMMemoryStartupBytes"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content = "VHD Size"/>
+                    <TextBox Name = "VHDSizeBytes"/>
+                </DockPanel>
+                <DockPanel>
+                    <CheckBox Name = "dhcp" Content = "DHCP" IsChecked = "True"/>
+                </DockPanel>
+            </StackPanel>
+            <StackPanel Name = "networkSettings" DockPanel.Dock = "Right" Visibility = "Collapsed">
+                <DockPanel>
+                    <Label Content =  "IP Address"/>
+                    <TextBox Name =  "NetAddress"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content =  "Subnet Mask"/>
+                    <TextBox Name = "NetNetmask"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content =  "Default Gateway"/>
+                    <TextBox Name = "NetGateway"/>
+                </DockPanel>
+                <DockPanel>
+                    <Label Content =  "DNS Servers"/>
+                    <TextBox Name = "NameServers"/>
+                </DockPanel>
+                <TextBox Name="LogTextBox"/>
+            </StackPanel>
+        </DockPanel>
+        <DockPanel>
+            <StackPanel Orientation = "Horizontal">
+                <Button Name = "createVm" Content = "Create VM"/>
+                <Button Name = "cancel" Content = "Cancel"/>
+            </StackPanel>
+        </DockPanel>
+    </StackPanel>
+</Window>

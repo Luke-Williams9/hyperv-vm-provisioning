@@ -135,21 +135,6 @@ $bsdtarPath = Join-Path $PSScriptRoot "tools\bsdtar.exe"
 <# -------------------------------------------------------- Hardware validation ----------------------------------------------------------------#>
 
 
-# RAM check - leave 1GB free on the host
-$freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum)
-If ($VMMemoryStartupBytes -gt $freeRAMbytes) {
-  Write-Warning "Requested memory ($VMMemoryStartupBytes) exceeds available host memory ($freeRAMbytes)."  
-  Do {
-    $VMMemoryStartupBytes -= 128MB
-  } While ($VMMemoryStartupBytes -gt $freeRAMbytes)
-}
-
-# Also do a CPU check
-$CPUs = Get-CimInstance Win32_ComputerSystem
-If ($CPUs.NumberOfLogicalProcessors -lt $VMProcessorCount) {
-  Write-Warning "Requested CPU count is higher than available logical processors (${CPUs.NumberOfLogicalProcessors}). Reducing count."
-  $VMprocessorCount = $CPUs.NumberOfLogicalProcessors
-}
 
 # Time Zone
 # If not specified, then we generate a basic 'etc/GMT' timezone from hosts time zone
@@ -219,30 +204,21 @@ if ($NetAutoconfig -eq $false) {
     Exit 1
   }
 
-  $nSplit = $NetAddress.split('/')
-  Switch ($nSplit.count) {
-    {$_ -gt 2} {
-      Write-Error "IP CIDR not valid...?"
-      Write-Error $_
-      Exit 1
-    }
-    {$_ -eq 2} {
-      $netAddress = $nSplit[0]
-      $netMaskbits = $nSplit[1]
-    }
-    {$_ -le 1} {
-      $netMaskbits = '24'
-    }
+if ( -not $NetAutoconfig ) {
+  $n_temp = Create-NetSettings $NetAddress
+  if (-not $NetAddress) {
+    $NetAddress = $n_temp.NetAddress
   }
-  If ( -not $NetNetmask) {
-    Write-Verbose "No subnet mask specified, assuming 255.255.255.0"
-    $NetNetmask = '255.255.255.0'
+  if (-not $NetNetmask) {
+    $NetNetmask = $n_temp.NetNetmask
   }
-
-  If ( -not $NetNetGateway) {
-    Write-Verbose "No gateway IP specified, assuming .1"
-    $NetGateway = $NetAddress -replace '\.\d+$','.1'
+  if (-not $Netmaskbits) {
+    $Netmaskbits = $n_temp.Netmaskbits
   }
+  if (-not $NetGateway) {
+    $NetGateway = $n_temp.NetGateway
+  }
+}
 
   Write-Verbose "VMStaticMacAddress: '$NetMacAddress'"
   Write-Verbose "NetInterface:     '$NetInterface'"
@@ -281,19 +257,19 @@ Write-Verbose "Using temp path: $tempPath"
 If ($virtualSwitchName -notin "",$null) {
     Write-Verbose "Connecting VMnet adapter to virtual switch '$virtualSwitchName'..."
 } else {
-  Write-Warning "No Virtual network switch given."
+  Write-Verbose "No Virtual network switch given."
   $SwitchList = Get-VMSwitch | Where-Object SwitchType -eq 'External'
   Switch ($SwitchList.Count) {
     {$_ -gt 1} {
       $virtualSwitchName = ((Get-VM).NetworkAdapters.SwitchName | Group-Object | Sort-Object Count | Select-Object -last 1).name
-      Write-Warning "Using the most frequently used vSwitch: $virtualSwitchName"  
+      Write-Verbose "Using the most frequently used vSwitch: $virtualSwitchName"  
     }
     1 {
       $virtualSwitchName = $SwitchList.Name
-      Write-Warning "Using the only external vSwitch: $virtualSwitchName"
+      Write-Verbose "Using the only external vSwitch: $virtualSwitchName"
     }
     Default {
-      Write-Warning "Attempting to use Default Switch"
+      Write-Verbose "Attempting to use Default Switch"
       $virtualSwitchName = "Default Switch"
     }
   }
@@ -301,6 +277,11 @@ If ($virtualSwitchName -notin "",$null) {
     Throw "Error using virtual switch $virtualSwitchName"
   }
 }
+
+
+
+
+Write-Host "Show GUI: " $Show_GUI
 
 # Update this to the release of Image that you want
 # But Azure images can't be used because the waagent is trying to find ephemeral disk
@@ -312,168 +293,187 @@ If ($virtualSwitchName -notin "",$null) {
 write-host "get distros"
 $distros = Get-Content distros.json | ConvertFrom-JSON -depth 100
 
-Add-Type -AssemblyName PresentationFramework
-$xaml = @"
-<Window 
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    Title="Linux VM Creator"
-    Background="#FF2D2D30" Foreground="#FFFFFF">
-    <StackPanel>
-      <DockPanel Margin="10">
-          <StackPanel DockPanel.Dock="Left">
-              <DockPanel>
-                  <Label Content="VM Name" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="VMName" DockPanel.Dock="Right" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Content="Admin Username" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="GuestAdminUsername" DockPanel.Dock="Right" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Content="Admin Password" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <PasswordBox Name="GuestAdminPassword" DockPanel.Dock="Right" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Content="Admin SSH Public Key" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="GuestAdminSshPubKey" DockPanel.Dock="Right" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Content="Distro" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <ComboBox Name="imageOS" DockPanel.Dock="Right" Height="23" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Content="Version" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <ComboBox Name="version" DockPanel.Dock="Right" Height="23" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Content="Processor Count" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="VMProcessorCount" DockPanel.Dock="Right" Height="23" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Content="Memory Startup Bytes" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="VMMemoryStartupBytes" DockPanel.Dock="Right" Height="23" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <CheckBox Name="dhcp" Content="DHCP" IsChecked="True"/>
-          </StackPanel>
-          <StackPanel Name="networkSettings" DockPanel.Dock="Right">
-              <DockPanel>
-                  <Label Name="addressLabel" Content="Address" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="NetAddress" DockPanel.Dock="Right" Height="23" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Name="netmaskLabel" Content="Netmask" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="NetNetmask" DockPanel.Dock="Right" Height="23" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Name="gatewayLabel" Content="Gateway" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="NetGateway" DockPanel.Dock="Right" Height="23" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-              <DockPanel>
-                  <Label Name="nameserversLabel" Content="Name Servers" DockPanel.Dock="Left" Foreground="#FFFFFF"/>
-                  <TextBox Name="NameServers" DockPanel.Dock="Right" Height="23" TextWrapping="Wrap" Width="250" HorizontalAlignment="Right"/>
-              </DockPanel>
-          </StackPanel>
-      </DockPanel>
-      <StackPanel Orientation="Horizontal">
-          <Button Name="createVm" Content="Create VM" Width="75"/>
-          <Button Name="cancel" Content="Cancel" Margin="10,0,0,0" Width="75"/>
-      </StackPanel>
-    </StackPanel>
-</Window>
-"@
+<# --------------------------------------------------------- GUI --------------------------------------------------------------------------------------#>
 
+# If the script is run without any parameters, then show the gui
+$Show_GUI = ($PSBoundParameters.Count -eq 0) 
 
-# Parse the XAML
-$xamlReader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($xaml))
-$window = [Windows.Markup.XamlReader]::Load($xamlReader)
-
-write-host "get elements"
-# Get elements from the window
-$createVm = $window.FindName("createVm")
-$cancel = $window.FindName("cancel")
-$imageOS_dropdown = $window.FindName("imageOS")
-$version = $window.FindName("version")
-
-# Get elements from the window
-$dhcp = $window.FindName("dhcp")
-$addressLabel = $window.FindName("addressLabel")
-$NetAddress = $window.FindName("NetAddress")
-$netmaskLabel = $window.FindName("netmaskLabel")
-$NetNetmask = $window.FindName("NetNetmask")
-$gatewayLabel = $window.FindName("gatewayLabel")
-$NetGateway = $window.FindName("NetGateway")
-$nameserversLabel = $window.FindName("nameserversLabel")
-$NameServers = $window.FindName("NameServers")
-
-# Set default values
-
-write-host "set default values"
-
-$window.FindName("VMName").Text = $VMName
-$window.FindName("GuestAdminUsername").Text = $GuestAdminUsername
-#$window.FindName("imageOS").Text = "ubuntu"
-$window.FindName("VMProcessorCount").Text = "2"
-$window.FindName("VMMemoryStartupBytes").Text = "1073741824"
-
-
-# Get elements from the window
-$dhcp = $window.FindName("dhcp")
-$networkSettings = $window.FindName("networkSettings")
-
-# Hide the network settings by default
-$networkSettings.Visibility = [Windows.Visibility]::Collapsed
-
-# Handle the Checked and Unchecked events
-$dhcp.Add_Checked({
+if ($Show_GUI) {
+  # Parse the XAML
+  Add-Type -AssemblyName PresentationFramework
+  $xaml = Get-Content gui.xaml
+  $xamlReader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($xaml))
+  $window = [Windows.Markup.XamlReader]::Load($xamlReader)
+  
+  write-host "get elements"
+  # Get elements from the window
+  
+  # Buttons
+  $B_createVm = $window.FindName("createVm")
+  write-host "------------------------"
+  write-host $B_createVm
+  write-host "------------------------"
+  $B_cancel = $window.FindName("cancel")
+  
+  # Basic settings
+  $T_VMName = $window.FindName("VMName")
+  $D_imageOS = $window.FindName("imageOS")
+  $T_version = $window.FindName("version")
+  $T_GuestAdminUsername = $window.FindName("GuestAdminUsername")
+  $T_GuestAdminPassword = $window.FindName("GuestAdminPassword")
+  $T_GuestAdminSshPubKey = $window.FindName("GuestAdminSshPubKey")
+  $I_ProcessorCount = $window.FindName("VMProcessorCount")
+  $I_MemoryStartupBytes = $window.FindName("VMMemoryStartupBytes")
+  $I_VHDSizeBytes = $window.FindName("VHDSizeBytes")
+  $LogTextBox = $window.FindName("LogTextBox")
+  
+  # Network settings
+  $dhcp = $window.FindName("dhcp")
+  $T_NetAddress = $window.FindName("NetAddress")
+  $T_NetNetmask = $window.FindName("NetNetmask")
+  $T_NetGateway = $window.FindName("NetGateway")
+  $T_NameServers = $window.FindName("NameServers")
+  $networkSettings = $window.FindName("networkSettings")
+  
+  # Set default values
+  
+  write-host "set default values"
+  $T_VMName.text = $VMName
+  $T_GuestAdminUsername.text = $GuestAdminUsername
+  $T_GuestAdminPassword.text = $GuestAdminPassword
+  $T_GuestAdminSshPubKey.text = $GuestAdminSshPubKey
+  $I_ProcessorCount.text = $VMProcessorCount
+  $I_MemoryStartupBytes.text = "1GB" #$VMMemoryStartupBytes
+  $I_VHDSizeBytes.text = "16GB" #$VHDSizeBytes
+  
+  # Default Distro
+  $D_imageOS.SelectedItem = $ImageOS
+  
+  write-host "add event handlers"
+  
+  write-host "2"
+  # Hide the network settings by default
+  $networkSettings.Visibility = [Windows.Visibility]::Collapsed
+  write-host "3"
+  # Handle the Checked and Unchecked events
+  $dhcp.Add_Checked({
+    $NetAutoconfig = $true
     $networkSettings.Visibility = [Windows.Visibility]::Collapsed
-})
-$dhcp.Add_Unchecked({
+    # We need to rewrite the network configuration, probably put it all into a function
+  })
+  write-host "4"
+  $dhcp.Add_Unchecked({
+    $NetAutoconfig = $false
     $networkSettings.Visibility = [Windows.Visibility]::Visible
-})
-
-
-# Define what happens when the buttons are clicked
-
-# Handle the SelectionChanged event
-$imageOS_dropdown.Add_SelectionChanged({
-  $imageOS = $imageOS_dropdown.SelectedItem
-  # Clear the version ComboBox
-  $version.Items.Clear()
-  # Get the selected distro
-  $selectedDistro = $distros | Where-Object { $_.ImageOS -eq $imageOS_dropdown.SelectedItem }
-  # Populate the version ComboBox with the versions of the selected distro
-  $selectedDistro.ImageVersionTable.PSObject.properties | ForEach-Object {
-      $version.Items.Add($_.name)
+  })
+  $I_ProcessorCount.Add_LostFocus({
+    if ( -not ($I_ProcessorCount.Text -match '^\d+$') ) {
+      $I_ProcessorCount.Text = "2"
+    }
+    $VMProcessorCount = $I_ProcessorCount.Text
+  })
+  write-host "5"
+  $T_NetAddress.Add_LostFocus({
+    Try {
+      $T_NetAddress.Background = "White"
+      #Write-Log $T_NetAddress.Text
+      
+      $n = Create-NetSettings $T_NetAddress.Text
+      if ($T_NetNetmask.Text -in '',$null) {
+        $T_NetNetmask.Text = $n.NetNetmask
+        $NetNetmask = $n.NetNetmask
+      }
+      if ($T_NetGateway.Text -in '',$null) {
+        $T_NetGateway.Text = $n.NetGateway
+        $NetGateway = $n.NetGateway
+      }
+      if ($T_NameServers.Text -in '',$null) {
+        $T_NameServers.Text = $n.NetGateway
+        $NameServers = $n.NameServers
+      }
+      $netAddress = $n.NetAddress
+      $Netmaskbits = $n.Netmaskbits  
+    }
+    Catch {
+      $T_NetAddress.Text = "Invalid IP"
+      $T_NetAddress.Background = "Red"
+      $LogTextBox.Text = $_
+    }
+  })
+  write-host "6"
+  # Handle the SelectionChanged event
+  $D_imageOS.Add_SelectionChanged({
+    $imageOS = $D_imageOS.SelectedItem
+    $T_version.Items.Clear()
+    $selectedDistro = $distros | Where-Object { $_.ImageOS -eq $D_imageOS.SelectedItem }
+    # Populate the version ComboBox with the versions of the selected distro
+    $selectedDistro.ImageVersionTable.PSObject.properties | ForEach-Object {
+        $T_version.Items.Add($_.name)
+    }
+    $T_version.SelectedItem = $selectedDistro.ImageDefaultVersion
+  })
+  write-host "7"
+  $T_version.Add_SelectionChanged({
+    $ImageVersion = $T_version.SelectedItem
+  })
+  write-host "8"
+  $distros | ForEach-Object {
+    $D_imageOS.Items.Add($_.ImageOS)
   }
-  $version.SelectedItem = $selectedDistro.ImageDefaultVersion
-})
+  $D_imageOS.SelectedItem = $ImageOS
+  $script:runjob = $false
 
-$version.Add_SelectionChanged({
-  $ImageVersion = $version.SelectedItem
-})
+  $B_createVm.Add_Click({
+      # Parse the memory size into bytes
+      $script:runjob = $true
+      try   { $VMMemoryStartupBytes = ConvertTo-Bytes $I_MemoryStartupBytes.Text }
+      catch { $VMMemoryStartupBytes = 1GB }
+      try   { $VHDSizeBytes = ConvertTo-Bytes $I_VHDSizeBytes.Text }
+      catch { $VHDSizeBytes = 16GB }
+      $VMName = $T_VMName.text
+      $GuestAdminUsername = $T_GuestAdminUsername.text
+      $GuestAdminPassword = $T_GuestAdminPassword.text
+      $GuestAdminSshPubKey = $T_GuestAdminSshPubKey.text
+      $VMProcessorCount = $I_ProcessorCount.text
+      $ImageOS = $D_imageOS.SelectedItem
+      $ImageVersion = $T_version.SelectedItem
+      $window.Close()
+      
+  })
 
-$distros | ForEach-Object {
-  $imageOS_dropdown.Items.Add($_.ImageOS)
+  $B_cancel.Add_Click({
+      # Close the window
+      $window.Close()
+      exit 0
+  })
+  
+  $window.ShowDialog() | Out-Null
+  write-host "runjob: $runjob"
+  if (-not $script:runjob) {
+    exit 0
+  }
 }
-$imageOS_dropdown.SelectedItem = $ImageOS
 
-$runjob = $false
-$createVm.Add_Click({
-    $window.Close()
-    $runjob = $true
-})
-$cancel.Add_Click({
-    # Close the window
-    $window.Close()
-    Write-Host $imageOS
-})
 
-# Show the window
-$window.ShowDialog() | Out-Null
+<# -------------------------------------------------------- Hardware checks -----------------------------------------------------------------------------------#>
 
-if ( $runjob -eq $false) {
-  exit 0
+# RAM check - leave 1GB free on the host
+$freeRAMbytes = (((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize * 1KB) - (Get-Process | Measure-Object WorkingSet -Sum).Sum)
+If ($VMMemoryStartupBytes -gt $freeRAMbytes) {
+  Write-Warning "Requested memory ($VMMemoryStartupBytes) exceeds available host memory ($freeRAMbytes)."  
+  Do {
+    $VMMemoryStartupBytes -= 128MB
+  } While ($VMMemoryStartupBytes -gt $freeRAMbytes)
 }
+
+# Also do a CPU check
+$CPUs = Get-CimInstance Win32_ComputerSystem
+If ($CPUs.NumberOfLogicalProcessors -lt $VMProcessorCount) {
+  Write-Warning "Requested CPU count is higher than available logical processors (${CPUs.NumberOfLogicalProcessors}). Reducing count."
+  $VMprocessorCount = $CPUs.NumberOfLogicalProcessors
+}
+
+
 <# -------------------------------------------------------- Image URL and local path variables ----------------------------------------------------------------#>
 
 
